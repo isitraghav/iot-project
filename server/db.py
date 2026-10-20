@@ -168,6 +168,9 @@ class _PgConn:
         return c
 
     def executescript(self, sql):
+        # Use autocommit so a failed statement (e.g. "already exists") doesn't
+        # poison the transaction and block all subsequent statements.
+        self._conn.autocommit = True
         cur = self._conn.cursor()
         for stmt in re.split(r';', sql):
             stmt = stmt.strip()
@@ -175,8 +178,8 @@ class _PgConn:
                 try:
                     cur.execute(stmt)
                 except Exception:
-                    pass  # ignore "already exists" errors
-        self._conn.commit()
+                    pass
+        self._conn.autocommit = False
 
     def commit(self):
         self._conn.commit()

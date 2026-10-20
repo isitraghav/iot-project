@@ -9,3 +9,6 @@ __pycache__/
 *.pyc
 .pio/
 
+.neon
+node_modules/
+.env.local
