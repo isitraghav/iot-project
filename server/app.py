@@ -7,11 +7,15 @@
 On Vercel the app is stateless: serial/simulator modes are not available.
 ESP32 devices push data via POST /api/ingest authenticated with their API key.
 """
+import sys
+import os
+# Ensure server/ siblings are importable when Vercel runs from the repo root
+sys.path.insert(0, os.path.dirname(__file__))
+
 import argparse
 import asyncio
 import json
 import logging
-import os
 import time
 from contextlib import asynccontextmanager
 
