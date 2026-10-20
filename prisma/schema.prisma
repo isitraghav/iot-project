@@ -1,0 +1,66 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model sensors {
+  id         String  @id
+  name       String
+  api_key    String  @unique
+  location   String?
+  created_at Float
+  last_seen  Float?
+}
+
+model devices {
+  id          String  @id
+  kind        String
+  randomized  Int
+  vendor      String?
+  fp          String?
+  name        String?
+  first_seen  Float
+  last_seen   Float
+  last_rssi   Int?
+  label       String?
+  ignored     Int     @default(0)
+  dev_type    String?
+  model       String?
+  confidence  String?
+  details     String?
+  entity_id   String?
+  linked_from String?
+  link_score  Float?
+  sensor_id   String?
+}
+
+model minute_stats {
+  minute    BigInt
+  device_id String
+  max_rssi  Int
+  hits      Int
+  sensor_id String?
+
+  @@id([minute, device_id])
+}
+
+model visits {
+  id         BigInt  @id @default(autoincrement())
+  device_id  String
+  start      Float
+  end        Float
+  max_rssi   Int
+  samples    Int
+  phone_idle Int     @default(0)
+  phone_use  Int     @default(0)
+  sensor_id  String?
+}
+
+model settings {
+  key   String @id
+  value String
+}
