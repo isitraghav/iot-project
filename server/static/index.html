@@ -19,6 +19,7 @@
     <button data-tab="live">Live</button>
     <button data-tab="retention">Retention</button>
     <button data-tab="devices">Devices &amp; Tags</button>
+    <button data-tab="fleet">Fleet</button>
     <button data-tab="settings">Settings</button>
   </nav>
   <div class="right">
@@ -176,6 +177,27 @@
     <div class="card">
       <p class="sub">Give a device a label to tag it as a known user (it's then tracked for retention even if its address is random). Turn on <b>Ignore</b> for your own devices, staff, or fixed devices so they don't count as audience.</p>
       <div class="tbl-wrap"><table class="tbl" id="devTable"></table></div>
+    </div>
+  </section>
+
+  <!-- FLEET -->
+  <section id="tab-fleet" class="tab">
+    <div class="card narrow">
+      <div class="card-h"><h3>Add billboard sensor</h3></div>
+      <p class="sub">Each physical ESP32 is a sensor. Give it a name, then flash the downloaded <code>config.h</code> using <code>flash.bat</code>.</p>
+      <form id="fleetForm" class="form">
+        <div class="row"><div><label for="fleetName">Billboard name</label><div class="help">e.g. "Main Street Billboard" or "Mall Entrance"</div></div>
+          <input id="fleetName" type="text" placeholder="Billboard #1" required></div>
+        <div class="row"><div><label for="fleetLoc">Location (optional)</label><div class="help">Address or description</div></div>
+          <input id="fleetLoc" type="text" placeholder="123 Main St"></div>
+        <div class="row"><div><label for="fleetWifi">WiFi SSID</label></div><input id="fleetWifi" type="text" placeholder="your_wifi_ssid"></div>
+        <div class="row"><div><label for="fleetPass">WiFi password</label></div><input id="fleetPass" type="text" placeholder="your_password"></div>
+        <div class="actions"><button class="primary" type="submit">Create &amp; download config.h</button><span class="muted small" id="fleetMsg"></span></div>
+      </form>
+    </div>
+    <div class="card" id="fleetList">
+      <div class="card-h"><h3>Your sensors</h3><button class="link" id="refreshFleet">Refresh</button></div>
+      <div class="tbl-wrap"><table class="tbl" id="fleetTable"></table></div>
     </div>
   </section>
 

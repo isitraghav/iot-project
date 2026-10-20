@@ -29,13 +29,14 @@ def _load_salt():
     if not os.path.exists(path):
         with open(path, "w") as f:
             f.write(secrets.token_hex(32))
-        os.chmod(path, 0o600)
+        if os.name != "nt":
+            os.chmod(path, 0o600)
     with open(path) as f:
         return bytes.fromhex(f.read().strip())
 
 
 class Processor:
-    def __init__(self, on_cycle=None):
+    def __init__(self, on_cycle=None, sensor_id=None):
         self.salt = _load_salt()
         self.conn = db.connect()
         self.settings = db.get_settings(self.conn)
@@ -44,6 +45,7 @@ class Processor:
         self.profiles = {}         # device_id -> [details, ble_name, dev_type, model, confidence]
         self.on_cycle = on_cycle
         self.autocommit = True     # backfill turns this off and commits in batches
+        self.sensor_id = sensor_id
         self.status = {"source": None, "connected": False, "last_hb": None, "fw": None,
                        "chip": None, "heap": None, "uptime": None, "cycles": 0, "dropped": 0}
         self.known = set(r[0] for r in self.conn.execute("SELECT id FROM devices"))
@@ -131,6 +133,7 @@ class Processor:
         details_json = json.dumps(details, separators=(",", ":"))
 
         c = self.conn
+        sid = self.sensor_id
         with db.write_lock:
             if dev in self.known:
                 c.execute("""UPDATE devices SET last_seen=?, last_rssi=?, vendor=COALESCE(?, vendor), fp=COALESCE(?, fp),
@@ -138,16 +141,16 @@ class Processor:
                           (ts, rssi, vendor, fp, name, dev_type, model, conf, details_json, dev))
             else:
                 c.execute("""INSERT INTO devices(id, kind, randomized, vendor, fp, name, first_seen, last_seen, last_rssi,
-                                                 dev_type, model, confidence, details)
-                             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                          (dev, kind, randomized, vendor, fp, name, ts, ts, rssi, dev_type, model, conf, details_json))
+                                                 dev_type, model, confidence, details, sensor_id)
+                             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                          (dev, kind, randomized, vendor, fp, name, ts, ts, rssi, dev_type, model, conf, details_json, sid))
                 self.known.add(dev)
 
             if kind != "ap":  # access points are infrastructure, not audience
-                c.execute("""INSERT INTO minute_stats(minute, device_id, max_rssi, hits) VALUES (?,?,?,?)
+                c.execute("""INSERT INTO minute_stats(minute, device_id, max_rssi, hits, sensor_id) VALUES (?,?,?,?,?)
                              ON CONFLICT(minute, device_id) DO UPDATE SET
                                max_rssi=MAX(max_rssi, excluded.max_rssi), hits=hits+excluded.hits""",
-                          (int(ts // 60), dev, rssi, hits))
+                          (int(ts // 60), dev, rssi, hits, sid))
 
                 act = details.get("activity")        # Apple screen state, when present
                 idle = 1 if act == "idle" else 0
@@ -163,8 +166,8 @@ class Processor:
                     c.execute("UPDATE visits SET end=?, max_rssi=?, samples=?, phone_idle=?, phone_use=? WHERE id=?",
                               (v[1], v[2], v[3], v[4], v[5], v[0]))
                 else:
-                    cur = c.execute("""INSERT INTO visits(device_id, start, end, max_rssi, samples, phone_idle, phone_use)
-                                       VALUES (?,?,?,?,1,?,?)""", (dev, ts, ts, rssi, idle, use))
+                    cur = c.execute("""INSERT INTO visits(device_id, start, end, max_rssi, samples, phone_idle, phone_use, sensor_id)
+                                       VALUES (?,?,?,?,1,?,?,?)""", (dev, ts, ts, rssi, idle, use, sid))
                     self.open_visits[dev] = [cur.lastrowid, ts, rssi, 1, idle, use]
 
         self.cycle_devices.append({"id": dev, "kind": kind, "rssi": rssi, "vendor": vendor, "type": dev_type})

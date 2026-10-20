@@ -11,7 +11,7 @@ USB to this PC, where a Python service stores it and serves a live dashboard.
                                                                          browser ◀──────┘ http://localhost:8000
 ```
 
-## Production service
+## Production service (Linux)
 
 The dashboard runs as a systemd user service. It starts on boot (linger is
 enabled) and restarts on crash. Open http://localhost:8000.
@@ -26,6 +26,10 @@ The unit file is `~/.config/systemd/user/billboard.service`. To open the
 dashboard to your LAN, change `--host 127.0.0.1` to `0.0.0.0` there. The
 dashboard has no login, so anyone on the network could see it.
 
+On Windows, just keep `run.bat` running in a terminal. To auto-start on login,
+create a Task Scheduler task that runs `run.bat` at logon (or wrap it in a
+`.ps1` that stays in the background).
+
 ## Layout
 
 | Path | What |
@@ -38,6 +42,29 @@ dashboard has no login, so anyone on the network could see it.
 | `data/` | `billboard.db` and the secret `salt.key` (created on first run) |
 
 ## Setup
+
+### Windows
+
+```bat
+rem Install Python env (requires uv: https://github.com/astral-sh/uv)
+uv venv .venv
+uv pip install -p .venv -r requirements.txt
+
+rem Flash the ESP32 (connect it first; check Device Manager for the COM port)
+flash.bat
+
+rem Run the dashboard against the real sensor
+run.bat
+
+rem Or demo with no hardware: 14 days of synthetic history + live simulated traffic
+run.bat --simulate --backfill 14
+```
+
+The ESP32 will appear as a COM port (e.g. `COM3`) in Device Manager under
+*Ports (COM & LPT)* — install the CP210x or CH340 driver if it shows as unknown.
+Pass `--port COM3` if auto-detect misses it.
+
+### Linux / macOS
 
 ```bash
 # one-time: serial port access (log out/in afterwards)
@@ -56,9 +83,10 @@ uv venv .venv && uv pip install -p .venv -r requirements.txt
 ./run.sh --simulate --backfill 14
 ```
 
-Options: `--port /dev/ttyUSB0` (default: auto-detect CP210x/CH340/FTDI/Espressif),
+Options: `--port COM3` / `--port /dev/ttyUSB0` (default: auto-detect CP210x/CH340/FTDI/Espressif),
 `--host 0.0.0.0` to open the dashboard to your LAN, `--http-port 8000`.
-Use `BILLBOARD_DATA=/some/dir` to keep a separate database, e.g. for demos.
+Use `BILLBOARD_DATA=C:\path\to\dir` (Windows) or `BILLBOARD_DATA=/some/dir` (Linux) to keep a
+separate database, e.g. for demos.
 
 ## How it works
 

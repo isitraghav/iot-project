@@ -450,12 +450,69 @@ $('#settingsForm').onsubmit = async e => {
   setTimeout(() => $('#saveMsg').textContent = '', 3000);
 };
 
+// ---------------------------------------------------------------- fleet
+async function loadFleet() {
+  const rows = await api('/api/fleet');
+  const ago2 = ts => ts ? ago(ts) : 'never';
+  $('#fleetTable').innerHTML = `<thead><tr><th>Name</th><th>Location</th><th>Last seen</th><th>ID</th><th>Actions</th></tr></thead><tbody>` +
+    (rows.length ? rows.map(s => `<tr>
+      <td><b>${esc(s.name)}</b></td>
+      <td class="muted">${esc(s.location) || '–'}</td>
+      <td class="muted">${ago2(s.last_seen)}</td>
+      <td class="mono small">${s.id}</td>
+      <td class="actions-cell">
+        <button class="link" data-rotate="${s.id}">Rotate key</button>
+        <button class="link danger" data-del="${s.id}">Delete</button>
+      </td></tr>`).join('')
+      : '<tr><td colspan="5" class="muted">No sensors yet — add one above.</td></tr>') + '</tbody>';
+}
+
+$('#fleetTable').addEventListener('click', async e => {
+  const rotateId = e.target.dataset.rotate;
+  const delId = e.target.dataset.del;
+  if (rotateId) {
+    const { api_key } = await api(`/api/fleet/${rotateId}/rotate-key`, { method: 'POST' });
+    alert(`New API key for sensor ${rotateId}:\n\n${api_key}\n\nUpdate config.h and reflash.`);
+  }
+  if (delId && confirm('Delete this sensor? Its data stays in the database.')) {
+    await fetch(`/api/fleet/${delId}`, { method: 'DELETE' });
+    loadFleet();
+  }
+});
+
+$('#refreshFleet').onclick = loadFleet;
+
+$('#fleetForm').onsubmit = async e => {
+  e.preventDefault();
+  const name = $('#fleetName').value.trim();
+  const location = $('#fleetLoc').value.trim();
+  const wifiSsid = $('#fleetWifi').value.trim() || 'your_wifi';
+  const wifiPass = $('#fleetPass').value.trim() || 'your_password';
+  if (!name) return;
+  const sensor = await api('/api/fleet', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, location }),
+  });
+  // Auto-download config.h
+  const params = new URLSearchParams({ wifi_ssid: wifiSsid, wifi_pass: wifiPass });
+  const a = document.createElement('a');
+  a.href = `/api/fleet/${sensor.id}/config.h?${params}`;
+  a.download = 'config.h';
+  a.click();
+  $('#fleetMsg').textContent = `Sensor "${name}" created — config.h downloaded. Flash it with flash.bat.`;
+  setTimeout(() => $('#fleetMsg').textContent = '', 6000);
+  $('#fleetName').value = ''; $('#fleetLoc').value = '';
+  loadFleet();
+};
+
 // ---------------------------------------------------------------- refresh loop
 function refresh() {
   const t = state.tab;
   const p = t === 'overview' ? loadOverview() : t === 'live' ? loadLive() : t === 'retention' ? loadRetention()
     : t === 'radar' ? (typeof loadRadar === 'function' ? loadRadar() : null)
-    : t === 'devices' ? loadDevices() : t === 'settings' ? loadSettings() : null;
+    : t === 'devices' ? loadDevices() : t === 'fleet' ? loadFleet()
+    : t === 'settings' ? loadSettings() : null;
   p?.catch(err => console.error(err));
   api('/api/status').then(renderStatus).catch(() => {});
 }
