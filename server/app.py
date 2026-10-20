@@ -10,7 +10,9 @@ ESP32 devices push data via POST /api/ingest authenticated with their API key.
 import sys
 import os
 # Ensure server/ siblings are importable when Vercel runs from the repo root
-sys.path.insert(0, os.path.dirname(__file__))
+_here = os.path.dirname(os.path.abspath(__file__))
+if _here not in sys.path:
+    sys.path.insert(0, _here)
 
 import argparse
 import asyncio
