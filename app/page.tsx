@@ -213,10 +213,6 @@ export default function Page() {
       </aside>
       <div id="tooltip" className="tooltip hidden"></div>
 
-      {/* eslint-disable-next-line @next/next/no-sync-scripts */}
-      <script src="/app.js"></script>
-      {/* eslint-disable-next-line @next/next/no-sync-scripts */}
-      <script src="/radar.js"></script>
     </>
   )
 }
