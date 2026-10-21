@@ -1,9 +1,9 @@
 import { NextRequest } from 'next/server'
-import { visitsCsv } from '@/lib/analytics'
+import { visitsCsv, sensorId } from '@/lib/analytics'
 
 export async function GET(req: NextRequest) {
   const range = req.nextUrl.searchParams.get('range') ?? '7d'
-  const csv = await visitsCsv(range)
+  const csv = await visitsCsv(range, sensorId(req.nextUrl.searchParams.get('sensor')))
   return new Response(csv, {
     headers: {
       'Content-Type': 'text/csv',

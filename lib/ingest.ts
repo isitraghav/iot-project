@@ -71,19 +71,47 @@ export async function processBatch(msgs: Record<string, unknown>[], ts: number, 
   const deviceUpdates: Promise<unknown>[] = []
   const minuteUpdates: Promise<unknown>[] = []
   const visitUpdates: Promise<unknown>[] = []
+  let hb: Record<string, unknown> | null = null
+  let hello: Record<string, unknown> | null = null
 
   for (const msg of msgs) {
     const t = msg.t as string
     if (t === 'w' || t === 'b' || t === 'a') {
       await handleSighting(msg, ts, sensorId, s, existingDevices, openVisits, deviceUpdates, minuteUpdates, visitUpdates)
-    }
-    // heartbeat — nothing to do in stateless mode
+    } else if (t === 'hb') hb = msg
+    else if (t === 'hello') hello = msg
   }
 
   await Promise.all([...deviceUpdates, ...minuteUpdates, ...visitUpdates])
 
-  // Update sensor last_seen
-  await prisma.sensors.update({ where: { id: sensorId }, data: { last_seen: ts } })
+  await prisma.sensors.update({ where: { id: sensorId }, data: await sensorHealth(sensorId, ts, hb, hello) })
+}
+
+// Sensor last_seen plus health telemetry from the batch's heartbeat / boot message
+async function sensorHealth(sensorId: string, ts: number, hb: Record<string, unknown> | null, hello: Record<string, unknown> | null) {
+  const data: Record<string, unknown> = { last_seen: ts }
+  const int = (v: unknown) => (v == null || isNaN(Number(v)) ? undefined : Math.round(Number(v)))
+  if (hello) {
+    data.fw = (hello.fw as string) || undefined
+    data.chip = (hello.chip as string) || undefined
+    data.mac = (hello.mac as string) || undefined
+  }
+  if (hb) {
+    const prev = await prisma.sensors.findUnique({ where: { id: sensorId }, select: { uptime: true } })
+    const up = int(hb.up)
+    // Uptime going backwards means the ESP32 restarted since the last heartbeat
+    const rebooted = hello || (up != null && prev?.uptime != null && up < prev.uptime)
+    Object.assign(data, {
+      fw: (hb.fw as string) || data.fw, chip: (hb.chip as string) || data.chip,
+      uptime: up, heap: int(hb.heap), cycles: int(hb.cyc), dev_count: int(hb.dev), dropped: int(hb.drop),
+      last_hb: ts,
+      ...(up != null ? { booted_at: ts - up } : {}),
+      ...(rebooted && prev?.uptime != null ? { reboots: { increment: 1 } } : {}),
+    })
+  } else if (hello && !hb) {
+    data.booted_at = ts
+  }
+  return data
 }
 
 async function handleSighting(

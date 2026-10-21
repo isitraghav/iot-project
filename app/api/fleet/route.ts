@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { fleet } from '@/lib/fleet'
 import { randomBytes } from 'crypto'
 
 export async function GET() {
-  const sensors = await prisma.sensors.findMany({ orderBy: { created_at: 'asc' } })
-  return NextResponse.json(sensors.map(({ api_key: _k, ...s }) => s))
+  return NextResponse.json(await fleet())
 }
 
 export async function POST(req: NextRequest) {

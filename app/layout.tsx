@@ -1,14 +1,20 @@
-import type { Metadata } from 'next'
+import type { Metadata, Viewport } from 'next'
 import Script from 'next/script'
 
-export const metadata: Metadata = { title: 'Billboard Audience' }
+export const metadata: Metadata = { title: 'Billboard Fleet', description: 'Audience measurement and fleet health for billboard sensors' }
+export const viewport: Viewport = {
+  width: 'device-width', initialScale: 1, viewportFit: 'cover',
+  themeColor: [{ media: '(prefers-color-scheme: light)', color: '#f3f3f0' }, { media: '(prefers-color-scheme: dark)', color: '#0d0d0d' }],
+}
+
+// Applied before first paint so a saved theme never flashes the other one
+const THEME_BOOT = `try{var t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t}catch(e){}`
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
-        <meta charSet="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
         <link rel="stylesheet" href="/style.css" />
       </head>
       <body>

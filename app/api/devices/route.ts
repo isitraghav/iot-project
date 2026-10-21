@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { devices } from '@/lib/analytics'
+import { devices, sensorId } from '@/lib/analytics'
 
 export async function GET(req: NextRequest) {
   const p = req.nextUrl.searchParams
@@ -9,5 +9,6 @@ export async function GET(req: NextRequest) {
     p.get('tagged') === 'true',
     p.get('kind') ?? '',
     p.get('type') ?? '',
+    sensorId(p.get('sensor')),
   ))
 }

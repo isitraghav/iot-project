@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { heatmap } from '@/lib/analytics'
+import { heatmap, sensorId } from '@/lib/analytics'
 
 export async function GET(req: NextRequest) {
   const days = parseInt(req.nextUrl.searchParams.get('days') ?? '28')
-  return NextResponse.json(await heatmap(days))
+  return NextResponse.json(await heatmap(days, sensorId(req.nextUrl.searchParams.get('sensor'))))
 }

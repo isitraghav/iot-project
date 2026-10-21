@@ -26,6 +26,12 @@ export function rangeBounds(name: string, now?: number): [number, number, number
   return [start, n, bucket]
 }
 
+// Sensor IDs are 12 hex chars; anything else is treated as "all sensors" so it can't reach SQL
+export function sensorId(raw: string | null | undefined): string | null {
+  return raw && /^[a-f0-9]{6,32}$/.test(raw) ? raw : null
+}
+const sensorSql = (col: string, sensor: string | null) => (sensor ? ` AND ${col} = '${sensor}'` : '')
+
 let fixtureCache = { ts: 0, ids: new Set<string>() }
 
 async function getFixtures(s: Settings): Promise<Set<string>> {
@@ -51,7 +57,7 @@ async function getFixtures(s: Settings): Promise<Set<string>> {
   return ids
 }
 
-async function getExcluded(s: Settings): Promise<Set<string>> {
+export async function getExcluded(s: Settings): Promise<Set<string>> {
   const ignored = await prisma.devices.findMany({ where: { ignored: 1 }, select: { id: true } })
   const ids = new Set(ignored.map(r => r.id))
   if (s.auto_exclude_fixtures) {
@@ -61,20 +67,20 @@ async function getExcluded(s: Settings): Promise<Set<string>> {
   return ids
 }
 
-interface VisitRow {
+export interface VisitRow {
   device_id: string; start: number; end: number; max_rssi: number
   phone_idle: number; phone_use: number; kind: string; randomized: number
   fp: string | null; label: string | null; vendor: string | null; entity_id: string | null
-  stable: boolean
+  stable: boolean; sensor_id: string | null
 }
 
-async function getVisits(s: Settings, t0: number, t1: number, excl: Set<string>): Promise<VisitRow[]> {
+export async function getVisits(s: Settings, t0: number, t1: number, excl: Set<string>, sensor: string | null = null) {
   const rows = await prisma.$queryRawUnsafe<VisitRow[]>(`
-    SELECT v.device_id, v.start, v.end, v.max_rssi, v.phone_idle, v.phone_use,
+    SELECT v.device_id, v.sensor_id, v.start, v.end, v.max_rssi, v.phone_idle, v.phone_use,
            d.kind, d.randomized, d.fp, d.label, d.vendor, d.entity_id,
            (d.randomized = 0 OR (d.label IS NOT NULL AND d.label != '')) AS stable
     FROM visits v JOIN devices d ON d.id = v.device_id
-    WHERE v.start >= ${t0} AND v.start < ${t1} AND v.max_rssi >= ${s.passer_rssi}
+    WHERE v.start >= ${t0} AND v.start < ${t1} AND v.max_rssi >= ${s.passer_rssi}${sensorSql('v.sensor_id', sensor)}
   `)
   return rows
     .filter(r => !excl.has(r.device_id))
@@ -110,12 +116,12 @@ function kpis(visits: (VisitRow & { dwell: number; identity: string; viewer: boo
   }
 }
 
-export async function summary(rangeName: string) {
+export async function summary(rangeName: string, sensor: string | null = null) {
   const s = await getSettings()
   const [t0, t1, bucket] = rangeBounds(rangeName)
   const excl = await getExcluded(s)
-  const visits = await getVisits(s, t0, t1, excl) as any[]
-  const prev = await getVisits(s, t0 - (t1 - t0), t0, excl) as any[]
+  const visits = await getVisits(s, t0, t1, excl, sensor) as any[]
+  const prev = await getVisits(s, t0 - (t1 - t0), t0, excl, sensor) as any[]
 
   const k = kpis(visits, s)
   const prevK = kpis(prev, s)
@@ -183,21 +189,26 @@ export async function summary(rangeName: string) {
     vendorList = [...vendorList.slice(0, 5), { name: 'Other', count: other }]
   }
 
+  // Per-billboard comparison (only meaningful across the whole fleet)
+  const bySensor: Record<string, any[]> = {}
+  if (!sensor) for (const v of visits) (bySensor[v.sensor_id || ''] ||= []).push(v)
+
   return {
     range: rangeName, t0, t1, bucket, settings: s,
     kpis: k, prev: prevK, series, dwell: dwellHist,
+    by_sensor: Object.entries(bySensor).map(([id, vs]) => ({ id: id || null, ...kpis(vs, s) })),
     kinds: Object.fromEntries(Object.entries(kinds).map(([k, s]) => [k, s.size])),
     vendors: vendorList,
     excluded: excl.size,
   }
 }
 
-export async function heatmap(days = 28) {
+export async function heatmap(days = 28, sensor: string | null = null) {
   const s = await getSettings()
   const t1 = Date.now() / 1000
   const t0 = t1 - days * 86400
   const excl = await getExcluded(s)
-  const visits = (await getVisits(s, t0, t1, excl)) as any[]
+  const visits = (await getVisits(s, t0, t1, excl, sensor)) as any[]
 
   const cells = new Map<string, Set<string>>()
   for (const v of visits) {
@@ -228,7 +239,7 @@ export async function heatmap(days = 28) {
   return { grid, days }
 }
 
-export async function retention(days = 14) {
+export async function retention(days = 14, sensor: string | null = null) {
   const s = await getSettings()
   const now = new Date(); now.setHours(0, 0, 0, 0)
   const t0 = (new Date(now.getTime() - (days - 1) * 86400000)).getTime() / 1000
@@ -242,7 +253,7 @@ export async function retention(days = 14) {
            FLOOR((v.start - ${t0}) / 86400)::int AS day,
            d.first_seen
     FROM visits v JOIN devices d ON d.id = v.device_id
-    WHERE v.start >= ${t0} AND v.max_rssi >= ${s.passer_rssi} ${stableClause}
+    WHERE v.start >= ${t0} AND v.max_rssi >= ${s.passer_rssi} ${stableClause}${sensorSql('v.sensor_id', sensor)}
   `)
 
   const active = new Map<number, Set<string>>()
@@ -288,13 +299,25 @@ export async function retention(days = 14) {
   }
 }
 
-export async function live(windowS = 60) {
+// Devices a given sensor heard in the last windowS seconds (device rows are shared across sensors)
+async function heardBy(sensor: string, windowS: number): Promise<string[]> {
+  const fromMin = Math.floor((Date.now() / 1000 - windowS) / 60)
+  const rows = await prisma.$queryRawUnsafe<{ device_id: string }[]>(
+    `SELECT DISTINCT device_id FROM minute_stats WHERE minute >= ${fromMin} AND sensor_id = '${sensor}'
+     UNION SELECT id AS device_id FROM devices WHERE kind = 'ap' AND sensor_id = '${sensor}'`)
+  return rows.map(r => r.device_id)
+}
+
+export async function live(windowS = 60, sensor: string | null = null) {
   const s = await getSettings()
   const now = Date.now() / 1000
   const excl = await getExcluded(s)
 
   const devRows = await prisma.devices.findMany({
-    where: { last_seen: { gte: now - windowS }, kind: { not: 'ap' } },
+    where: {
+      last_seen: { gte: now - windowS }, kind: { not: 'ap' },
+      ...(sensor ? { id: { in: await heardBy(sensor, windowS) } } : {}),
+    },
     orderBy: { last_rssi: 'desc' },
   })
 
@@ -311,7 +334,7 @@ export async function live(windowS = 60) {
 
   const nowMin = Math.floor(now / 60)
   const perMin = await prisma.minute_stats.findMany({
-    where: { minute: { gt: nowMin - 60 }, max_rssi: { gte: s.passer_rssi } },
+    where: { minute: { gt: nowMin - 60 }, max_rssi: { gte: s.passer_rssi }, ...(sensor ? { sensor_id: sensor } : {}) },
   })
   const buckets: Record<number, [number, number]> = {}
   for (const r of perMin) {
@@ -332,7 +355,7 @@ export async function live(windowS = 60) {
   }
 }
 
-export async function devices(rangeName = '24h', q = '', taggedOnly = false, kind = '', devType = '', limit = 500) {
+export async function devices(rangeName = '24h', q = '', taggedOnly = false, kind = '', devType = '', sensor: string | null = null, limit = 500) {
   const s = await getSettings()
   const [t0] = rangeBounds(rangeName)
   const fx = await getFixtures(s)
@@ -364,13 +387,15 @@ export async function devices(rangeName = '24h', q = '', taggedOnly = false, kin
     params.push(devType)
   }
 
+  if (sensor) conditions.push(`EXISTS (SELECT 1 FROM visits sv WHERE sv.device_id = d.id AND sv.sensor_id = '${sensor}')`)
+
   const where = conditions.join(' AND ')
   const sql = `
     SELECT d.*, COUNT(v.id)::int AS visits,
            COALESCE(SUM(v.end - v.start + ${CYCLE_S}), 0)::float AS total_dwell,
            MAX(v.max_rssi) AS peak_rssi,
            COUNT(DISTINCT DATE(to_timestamp(v.start)))::int AS days_seen
-    FROM devices d LEFT JOIN visits v ON v.device_id = d.id
+    FROM devices d LEFT JOIN visits v ON v.device_id = d.id${sensorSql('v.sensor_id', sensor)}
     WHERE ${where}
     GROUP BY d.id ORDER BY d.last_seen DESC LIMIT ${limit}
   `
@@ -418,20 +443,20 @@ export async function deviceDetail(devId: string) {
   }
 }
 
-export async function visitsCsv(rangeName: string): Promise<string> {
+export async function visitsCsv(rangeName: string, sensor: string | null = null): Promise<string> {
   const s = await getSettings()
   const [t0, t1] = rangeBounds(rangeName)
   const rows = await prisma.$queryRawUnsafe<any[]>(`
-    SELECT v.device_id, d.kind, d.vendor, d.label, d.randomized, v.start, v.end, v.max_rssi
+    SELECT v.device_id, v.sensor_id, d.kind, d.vendor, d.label, d.randomized, v.start, v.end, v.max_rssi
     FROM visits v JOIN devices d ON d.id = v.device_id
-    WHERE v.start >= ${t0} AND v.start < ${t1}
+    WHERE v.start >= ${t0} AND v.start < ${t1}${sensorSql('v.sensor_id', sensor)}
     ORDER BY v.start
   `)
-  const lines = ['device_id,kind,vendor,label,randomized,start,end,dwell_s,max_rssi,zone\n']
+  const lines = ['device_id,sensor_id,kind,vendor,label,randomized,start,end,dwell_s,max_rssi,zone\n']
   for (const r of rows) {
     const zone = r.max_rssi >= s.viewer_rssi ? 'viewer' : r.max_rssi >= s.passer_rssi ? 'passerby' : 'far'
     const label = (r.label || '').replace(/"/g, "'")
-    lines.push(`${r.device_id},${r.kind},"${r.vendor || ''}","${label}",${r.randomized},` +
+    lines.push(`${r.device_id},${r.sensor_id || ''},${r.kind},"${r.vendor || ''}","${label}",${r.randomized},` +
       `${new Date(r.start * 1000).toISOString().replace('T', ' ').slice(0, 19)},` +
       `${new Date(r.end * 1000).toISOString().replace('T', ' ').slice(0, 19)},` +
       `${Math.round(r.end - r.start + CYCLE_S)},${r.max_rssi},${zone}\n`)
@@ -449,7 +474,7 @@ function bandIndex(dist: number): number {
   return BANDS.length - 1
 }
 
-export async function radar(windowS?: number, includeAp = false) {
+export async function radar(windowS?: number, includeAp = false, sensor: string | null = null) {
   const s = await getSettings()
   const win = windowS ?? s.radar_window_s
   const now = Date.now() / 1000
@@ -459,6 +484,7 @@ export async function radar(windowS?: number, includeAp = false) {
     where: {
       last_seen: { gte: now - win },
       ...(includeAp ? {} : { kind: { not: 'ap' } }),
+      ...(sensor ? { id: { in: await heardBy(sensor, win) } } : {}),
     },
   })
 
@@ -488,7 +514,7 @@ export async function radar(windowS?: number, includeAp = false) {
   }
 }
 
-export async function bands(rangeName = '24h') {
+export async function bands(rangeName = '24h', sensor: string | null = null) {
   const s = await getSettings()
   const [t0, t1] = rangeBounds(rangeName)
   const excl = await getExcluded(s)
@@ -496,7 +522,7 @@ export async function bands(rangeName = '24h') {
   const rows = await prisma.$queryRawUnsafe<{ device_id: string; rssi: number; kind: string; dev_type: string | null; details: string | null }[]>(`
     SELECT v.device_id, MAX(v.max_rssi)::int AS rssi, d.kind, d.dev_type, d.details
     FROM visits v JOIN devices d ON d.id = v.device_id
-    WHERE v.start >= ${t0} AND v.start < ${t1}
+    WHERE v.start >= ${t0} AND v.start < ${t1}${sensorSql('v.sensor_id', sensor)}
     GROUP BY v.device_id, d.kind, d.dev_type, d.details
   `)
 

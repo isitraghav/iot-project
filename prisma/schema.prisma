@@ -14,6 +14,18 @@ model sensors {
   location   String?
   created_at Float
   last_seen  Float?
+  // Health telemetry from the latest heartbeat / hello message
+  fw         String?
+  chip       String?
+  mac        String?
+  uptime     Int?
+  heap       Int?
+  cycles     Int?
+  dev_count  Int?
+  dropped    Int?
+  last_hb    Float?
+  booted_at  Float?
+  reboots    Int     @default(0)
 }
 
 model devices {
