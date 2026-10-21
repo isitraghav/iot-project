@@ -973,20 +973,44 @@ async function loadDevices({ force = false } = {}) {
   // don't clobber a tag the user is typing
   if (!force && document.activeElement?.closest('#devTable')) return;
   $('#devCount').textContent = `${fmt(rows.length)}${rows.length >= 500 ? '+' : ''} device${rows.length === 1 ? '' : 's'}`;
-  $('#devTable').innerHTML = `<thead><tr><th>Device</th><th>Tag</th><th>Radio</th><th>Vendor</th><th class="num">Distance</th><th class="num">Visits</th><th class="num">Days</th>
-    <th class="num">Time in range</th><th class="num">Peak</th><th>First seen</th><th>Last seen</th><th>Ignore</th></tr></thead><tbody>` +
+  $('#devTable').innerHTML = `<thead><tr><th>Device</th><th>MAC address</th><th>Tag</th><th>Radio</th><th>Vendor</th><th>Billboard</th><th class="num">Distance</th><th class="num">Signal</th>
+    <th class="num">Visits</th><th class="num">Days</th><th class="num">Time in range</th><th class="num">Peak</th><th>First seen</th><th>Last seen</th><th>Ignore</th></tr></thead><tbody>` +
     (rows.length ? rows.map(d => `<tr class="click" data-dev="${d.id}">
       <td>${typeCell(d)}</td>
+      <td class="nowrap">${macCell(d)}</td>
       <td><input type="text" data-label="${d.id}" value="${esc(d.label)}" placeholder="Add tag" aria-label="Tag for device ${d.id}"></td>
-      <td>${radioName(d.kind)} ${d.randomized ? '<span class="tag">random</span>' : '<span class="tag">stable</span>'}${d.fixture ? '<span class="tag">fixture</span>' : ''}${d.details?.connected ? '<span class="tag">connected</span>' : ''}</td>
+      <td class="nowrap">${radioName(d.kind)}${d.fixture ? '<span class="tag">fixture</span>' : ''}${d.details?.connected ? '<span class="tag">connected</span>' : ''}${d.details?.wifi_gen ? `<div class="muted small">${esc(d.details.wifi_gen)}${d.details.channel ? ' · ch ' + d.details.channel : ''}</div>` : d.details?.channel ? `<div class="muted small">ch ${d.details.channel}</div>` : ''}</td>
       <td>${esc(d.vendor) || '<span class="muted">–</span>'}</td>
+      <td class="nowrap">${seenByCell(d)}</td>
       <td class="num">${d.distance != null ? fmt(d.distance) + ' m' : '–'}</td>
+      <td class="num">${d.last_rssi != null ? d.last_rssi + ' dBm' : '–'}</td>
       <td class="num">${d.visits}</td><td class="num">${d.days_seen}</td><td class="num">${dur(d.total_dwell)}</td>
       <td class="num">${d.peak_rssi != null ? d.peak_rssi + ' dBm' : '–'}</td>
-      <td class="muted">${dateTime(d.first_seen)}</td><td class="muted">${ago(d.last_seen)}</td>
+      <td class="muted nowrap">${dateTime(d.first_seen)}</td><td class="muted nowrap">${ago(d.last_seen)}</td>
       <td><input type="checkbox" data-ignore="${d.id}" ${d.ignored ? 'checked' : ''} aria-label="Ignore device ${d.id}"></td></tr>`).join('')
-      : `<tr class="empty-row"><td colspan="12">No devices match</td></tr>`) + '</tbody>';
+      : `<tr class="empty-row"><td colspan="15">No devices match</td></tr>`) + '</tbody>';
 }
+const ADDR_TIP = {
+  random: 'Randomized address: the device rotates it for privacy, so the same phone can show up under several MACs',
+  stable: 'Stable address: burned into the hardware, stays the same across visits',
+};
+function macCell(d) {
+  const kindTag = `<span class="tag" title="${d.randomized ? ADDR_TIP.random : ADDR_TIP.stable}">${d.randomized ? 'random' : 'stable'}</span>`;
+  if (!d.mac) return `<span class="muted" title="Captured the next time a billboard hears this device">–</span>${kindTag}`;
+  return `<button class="mac" data-copy="${esc(d.mac)}" title="Copy MAC address">${esc(d.mac.toUpperCase())}</button>${kindTag}`;
+}
+function seenByCell(d) {
+  const ids = d.sensors?.length ? d.sensors : d.sensor_id ? [d.sensor_id] : [];
+  if (!ids.length) return '<span class="muted">–</span>';
+  const first = esc(sensorName(ids[0]));
+  return ids.length > 1 ? `<span title="${esc(ids.map(sensorName).join(', '))}">${first} <span class="muted">+${ids.length - 1}</span></span>` : first;
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-copy]');
+  if (!b) return;
+  e.stopPropagation();
+  navigator.clipboard.writeText(b.dataset.copy).then(() => toast(`Copied ${b.dataset.copy.toUpperCase()}`), () => toast('Couldn’t copy', 'error'));
+}, true);
 const patchDevice = (id, body) => api(`/api/devices/${id}`, json('PATCH', body))
   .then(() => toast(body.label !== undefined ? (body.label ? `Tagged “${body.label}”` : 'Tag removed') : body.ignored ? 'Device ignored' : 'Device counted again'))
   .catch(err => toast(err.message, 'error'));
@@ -998,7 +1022,7 @@ document.addEventListener('change', e => {
 document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.dataset?.label) e.target.blur(); });
 document.addEventListener('click', e => {
   const row = e.target.closest('tr[data-dev]');
-  if (row && !e.target.closest('input')) openDevice(row.dataset.dev);
+  if (row && !e.target.closest('input, button')) openDevice(row.dataset.dev);
 });
 
 async function openDevice(id) {
@@ -1011,7 +1035,11 @@ async function openDevice(id) {
   setSheetHead(`<span class="chip"><span class="tsw" style="background:${typeColor(t)};margin:0"></span>${TYPE_NAMES[t] || 'Other'}${dev.confidence === 'low' ? ' (guess)' : ''}</span><span>${radioName(dev.kind)}${dev.randomized ? ' · random address' : ''}</span>`,
     dev.label || dev.name || dev.model || dev.id);
   const rows = [
+    ['MAC address', '', dev.mac ? `<button class="mac" data-copy="${esc(dev.mac)}" title="Copy MAC address">${esc(dev.mac.toUpperCase())}</button>` : '<span class="muted">Not captured yet, recorded the next time a billboard hears it</span>'],
+    ['Address type', dev.randomized ? 'Random (rotates for privacy)' : dev.kind === 'ble' && x.addr_type === 'public' ? 'Public (fixed hardware address)' : 'Stable (fixed hardware address)'],
     ['Identified as', dev.model || '–'], ['Name', dev.name || '–'], ['Vendor', dev.vendor || '–'],
+    ['Radio', radioName(dev.kind)],
+    ['Seen by', '', d.sensors?.length ? d.sensors.map(s => `<div>${esc(sensorName(s.id))} <span class="muted">· ${s.visits} visit${s.visits === 1 ? '' : 's'}, last ${ago(s.last)}</span></div>`).join('') : esc(dev.sensor_id ? sensorName(dev.sensor_id) : '–')],
     ['Distance now', dev.distance != null ? `≈ ${fmt(dev.distance)} m (${dev.last_rssi} dBm)` : '–'],
     ...(x.activity_label ? [['Phone state', x.activity_label]] : []),
     ...(dev.linked_addresses > 1 ? [['Grouped addresses', `${dev.linked_addresses} rotating addresses linked as one device`]] : []),
@@ -1041,7 +1069,7 @@ async function openDevice(id) {
       </div>
     </section>
     <section><h4>Signal, last 24 h</h4><div class="chart small"><canvas id="cDevice"></canvas></div></section>
-    <section><h4>About</h4><dl class="kv group">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl></section>
+    <section><h4>About</h4><dl class="kv group">${rows.map(([k, v, html]) => `<dt>${k}</dt><dd>${html ?? esc(v)}</dd>`).join('')}</dl></section>
     <section><h4>Recent visits</h4><div class="group" style="padding:2px 10px">${table(['Start', 'Dwell', 'Peak', 'Phone'],
       d.visits.slice(0, 30).map(v => [dateTime(v.start), dur(v.dwell), `${v.max_rssi} dBm`, phoneState(v)]), 1)}</div></section>`;
   renderDeviceChart(d);

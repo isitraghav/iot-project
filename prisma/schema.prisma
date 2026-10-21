@@ -32,6 +32,7 @@ model devices {
   id          String  @id
   kind        String
   randomized  Int
+  mac         String?
   vendor      String?
   fp          String?
   name        String?

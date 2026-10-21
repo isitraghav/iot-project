@@ -234,7 +234,7 @@ export default function Page() {
               </a>
             </div>
             <div className="filters bar">
-              <input id="devSearch" type="search" placeholder="Search ID, tag, vendor, model" aria-label="Search devices" />
+              <input id="devSearch" type="search" placeholder="Search MAC, tag, vendor, model" aria-label="Search devices" />
               <Seg id="devSeg" attr="range" active="24h" items={[['1h', '1H'], ['24h', '24H'], ['7d', '7D'], ['30d', '30D']]} />
               <select id="devKind" aria-label="Radio"><option value="">WiFi + BLE</option><option value="wifi">WiFi</option><option value="ble">BLE</option><option value="ap">Access points</option></select>
               <select id="devType" aria-label="Device type"><option value="">All types</option></select>

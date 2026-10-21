@@ -2,6 +2,7 @@ import { createHmac } from 'crypto'
 import { prisma } from './prisma'
 import { getSettings } from './settings'
 import { classify, mergeDetails, detailsFromMsg, displayName } from './classify'
+import { deviceVendor, mdCompany, normMac } from './vendors'
 
 function getHmacSalt(): Buffer {
   const s = process.env.HMAC_SALT
@@ -148,13 +149,16 @@ async function handleSighting(
   }
 
   const dev = deviceId(kind, mac)
+  const macAddr = normMac(mac)
+  const mfr = msg.mfr != null && Number(msg.mfr) >= 0 ? Number(msg.mfr) : mdCompany(msg.md as string)
+  const vendor = deviceVendor(kind, mac, randomized, mfr)
   const existing = existingDevices.get(dev)
   const prevDetails = existing?.details ? JSON.parse(existing.details as string) : {}
   const newDetails = detailsFromMsg(msg)
   const details = mergeDetails(prevDetails, newDetails)
   const bleName = t === 'b' ? ((msg.name as string) || (existing?.name as string) || null) : null
   const name = displayName(kind, details, bleName)
-  const [devType, model, conf] = classify(kind, details, name, null, randomized)
+  const [devType, model, conf] = classify(kind, details, name, vendor, randomized)
   const prevConf = existing?.confidence as string
   const [finalType, finalModel, finalConf] =
     prevConf === 'high' && conf === 'low'
@@ -166,15 +170,15 @@ async function handleSighting(
     deviceUpdates.push(
       prisma.devices.update({
         where: { id: dev },
-        data: { last_seen: ts, last_rssi: rssi, fp: fp ?? undefined, name: name ?? undefined, dev_type: finalType, model: finalModel, confidence: finalConf, details: detailsJson },
+        data: { last_seen: ts, last_rssi: rssi, mac: macAddr, vendor: vendor ?? undefined, fp: fp ?? undefined, name: name ?? undefined, dev_type: finalType, model: finalModel, confidence: finalConf, details: detailsJson },
       })
     )
   } else {
     deviceUpdates.push(
       prisma.devices.upsert({
         where: { id: dev },
-        create: { id: dev, kind, randomized, vendor: null, fp, name, first_seen: ts, last_seen: ts, last_rssi: rssi, dev_type: finalType, model: finalModel, confidence: finalConf, details: detailsJson, sensor_id: sensorId },
-        update: { last_seen: ts, last_rssi: rssi, dev_type: finalType, model: finalModel, confidence: finalConf, details: detailsJson },
+        create: { id: dev, kind, randomized, mac: macAddr, vendor, fp, name, first_seen: ts, last_seen: ts, last_rssi: rssi, dev_type: finalType, model: finalModel, confidence: finalConf, details: detailsJson, sensor_id: sensorId },
+        update: { last_seen: ts, last_rssi: rssi, mac: macAddr, vendor: vendor ?? undefined, dev_type: finalType, model: finalModel, confidence: finalConf, details: detailsJson },
       })
     )
     existingDevices.set(dev, { id: dev, kind, randomized, details: detailsJson, confidence: finalConf, dev_type: finalType, model: finalModel, name })

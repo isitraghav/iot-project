@@ -371,8 +371,11 @@ export async function devices(rangeName = '24h', q = '', taggedOnly = false, kin
 
   if (q) {
     const like = `%${q}%`
-    conditions.push(`(d.id ILIKE $${params.length + 1} OR d.label ILIKE $${params.length + 2} OR d.vendor ILIKE $${params.length + 3} OR d.name ILIKE $${params.length + 4} OR d.model ILIKE $${params.length + 5})`)
-    params.push(like, like, like, like, like)
+    // MACs match with or without separators ("aa:bb", "aa-bb", "aabb")
+    const hex = /^[0-9a-f:.\-\s]+$/i.test(q) ? q.toLowerCase().replace(/[^0-9a-f]/g, '') : ''
+    const macLike = hex.length >= 2 ? `%${hex.match(/../g)!.join(':')}%` : like
+    conditions.push(`(d.id ILIKE $${params.length + 1} OR d.label ILIKE $${params.length + 2} OR d.vendor ILIKE $${params.length + 3} OR d.name ILIKE $${params.length + 4} OR d.model ILIKE $${params.length + 5} OR d.mac ILIKE $${params.length + 6} OR d.mac ILIKE $${params.length + 7})`)
+    params.push(like, like, like, like, like, like, macLike)
   }
 
   if (kind) {
@@ -394,7 +397,8 @@ export async function devices(rangeName = '24h', q = '', taggedOnly = false, kin
     SELECT d.*, COUNT(v.id)::int AS visits,
            COALESCE(SUM(v.end - v.start + ${CYCLE_S}), 0)::float AS total_dwell,
            MAX(v.max_rssi) AS peak_rssi,
-           COUNT(DISTINCT DATE(to_timestamp(v.start)))::int AS days_seen
+           COUNT(DISTINCT DATE(to_timestamp(v.start)))::int AS days_seen,
+           ARRAY_REMOVE(ARRAY_AGG(DISTINCT v.sensor_id), NULL) AS sensors
     FROM devices d LEFT JOIN visits v ON v.device_id = d.id${sensorSql('v.sensor_id', sensor)}
     WHERE ${where}
     GROUP BY d.id ORDER BY d.last_seen DESC LIMIT ${limit}
@@ -434,10 +438,16 @@ export async function deviceDetail(devId: string) {
   const root = d.entity_id || devId
   const linked = await prisma.devices.count({ where: { OR: [{ entity_id: root }, { id: root }] } })
 
+  const seenBy = await prisma.visits.groupBy({
+    by: ['sensor_id'], where: { device_id: devId }, _count: { _all: true }, _max: { end: true },
+  })
+
   const details = d.details ? JSON.parse(d.details) : {}
   delete details.md
   return {
     device: { ...d, details, distance: distanceM(d.last_rssi, d.kind, details, s), linked_addresses: linked },
+    sensors: seenBy.filter(r => r.sensor_id).map(r => ({ id: r.sensor_id, visits: r._count._all, last: r._max.end }))
+      .sort((a, b) => (b.last ?? 0) - (a.last ?? 0)),
     visits: visitRows.map(v => ({ ...v, id: v.id.toString(), dwell: v.end - v.start + CYCLE_S })),
     rssi: rssiRows.map(r => ({ t: Number(r.minute) * 60, rssi: r.max_rssi })),
   }
@@ -447,16 +457,16 @@ export async function visitsCsv(rangeName: string, sensor: string | null = null)
   const s = await getSettings()
   const [t0, t1] = rangeBounds(rangeName)
   const rows = await prisma.$queryRawUnsafe<any[]>(`
-    SELECT v.device_id, v.sensor_id, d.kind, d.vendor, d.label, d.randomized, v.start, v.end, v.max_rssi
+    SELECT v.device_id, v.sensor_id, d.mac, d.kind, d.vendor, d.label, d.randomized, v.start, v.end, v.max_rssi
     FROM visits v JOIN devices d ON d.id = v.device_id
     WHERE v.start >= ${t0} AND v.start < ${t1}${sensorSql('v.sensor_id', sensor)}
     ORDER BY v.start
   `)
-  const lines = ['device_id,sensor_id,kind,vendor,label,randomized,start,end,dwell_s,max_rssi,zone\n']
+  const lines = ['device_id,sensor_id,mac,kind,vendor,label,randomized,start,end,dwell_s,max_rssi,zone\n']
   for (const r of rows) {
     const zone = r.max_rssi >= s.viewer_rssi ? 'viewer' : r.max_rssi >= s.passer_rssi ? 'passerby' : 'far'
     const label = (r.label || '').replace(/"/g, "'")
-    lines.push(`${r.device_id},${r.sensor_id || ''},${r.kind},"${r.vendor || ''}","${label}",${r.randomized},` +
+    lines.push(`${r.device_id},${r.sensor_id || ''},${r.mac || ''},${r.kind},"${r.vendor || ''}","${label}",${r.randomized},` +
       `${new Date(r.start * 1000).toISOString().replace('T', ' ').slice(0, 19)},` +
       `${new Date(r.end * 1000).toISOString().replace('T', ' ').slice(0, 19)},` +
       `${Math.round(r.end - r.start + CYCLE_S)},${r.max_rssi},${zone}\n`)
