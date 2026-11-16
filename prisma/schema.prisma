@@ -79,11 +79,9 @@ model settings {
   value String
 }
 
-// Consent-registered devices. Only salted hashes are stored (never the raw MAC).
+// Tracked devices. Only salted hashes are stored (never the raw MAC).
 model tracked_devices {
   id         String @id // wifi-kind device hash
   ble_id     String
-  label      String
-  consent    String
   created_at Float
 }

@@ -1162,23 +1162,23 @@ $('#settingsForm').onsubmit = async e => {
   } catch (err) { toast(err.message, 'error'); }
 };
 
-// ---------------------------------------------------------------- tracking (consent-registered, hashed devices)
+// ---------------------------------------------------------------- tracking (hashed devices)
 async function loadTracking() {
   const rows = await api('/api/tracking?days=7');
-  $('#trackTable').innerHTML = '<thead><tr><th>Label</th><th>Consent</th><th class="num">Visits (7d)</th><th>Seen by</th><th>Last seen</th><th>Recent appearances</th><th></th></tr></thead><tbody>' +
+  $('#trackTable').innerHTML = '<thead><tr><th>Device</th><th class="num">Visits (7d)</th><th>Seen by</th><th>Last seen</th><th>Recent appearances</th><th></th></tr></thead><tbody>' +
     (rows.length ? rows.map(r => `<tr>
-      <td>${esc(r.label)}</td><td class="muted">${esc(r.consent)}</td><td class="num">${r.visits}</td>
+      <td class="nowrap">Device <span class="muted">${esc(r.id.slice(0, 6))}</span></td><td class="num">${r.visits}</td>
       <td>${r.sensors.length ? esc(r.sensors.map(sensorName).join(', ')) : '<span class="muted">–</span>'}</td>
       <td class="nowrap">${r.last_seen ? ago(r.last_seen) : '<span class="muted">never</span>'}</td>
       <td class="small">${r.timeline.slice(0, 5).map(t => `${dateTime(t.start)} · ${esc(sensorName(t.sensor_id))} · ${t.max_rssi} dBm`).join('<br>') || '<span class="muted">–</span>'}</td>
-      <td><button type="button" class="link" data-untrack="${r.id}">Remove</button></td></tr>`).join('')
-      : '<tr class="empty-row"><td colspan="7">No tracked devices yet</td></tr>') + '</tbody>';
+      <td><button type="button" class="btn sm danger-quiet" data-untrack="${r.id}">Remove</button></td></tr>`).join('')
+      : '<tr class="empty-row"><td colspan="6">No tracked devices yet</td></tr>') + '</tbody>';
 }
 $('#trackForm').onsubmit = async e => {
   e.preventDefault();
   const f = e.target;
   try {
-    await api('/api/tracking', json('POST', { mac: f.mac.value, label: f.label.value, consent: f.consent.value }));
+    await api('/api/tracking', json('POST', { mac: f.mac.value }));
     f.reset(); toast('Device added (MAC hashed)'); loadTracking().catch(netError);
   } catch (err) { toast(err.message, 'error'); }
 };

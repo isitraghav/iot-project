@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
     const v = visits.filter(x => x.device_id === t.id || x.device_id === t.ble_id)
     const sensors = [...new Set(v.map(x => x.sensor_id).filter(Boolean))]
     return {
-      id: t.id, label: t.label, consent: t.consent, created_at: t.created_at,
+      id: t.id, created_at: t.created_at,
       last_seen: v.length ? Math.max(...v.map(x => x.end)) : null,
       visits: v.length, sensors,
       timeline: v.slice(0, 50).map(x => ({ start: x.start, end: x.end, sensor_id: x.sensor_id, max_rssi: x.max_rssi })),
@@ -29,17 +29,13 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const mac = String(body.mac ?? '').trim()
-  const label = String(body.label ?? '').trim()
-  const consent = String(body.consent ?? '').trim()
   if (!MAC_RE.test(mac)) return NextResponse.json({ error: 'Enter a valid MAC address' }, { status: 400 })
-  if (!label) return NextResponse.json({ error: 'A label is required' }, { status: 400 })
-  if (!consent) return NextResponse.json({ error: 'Record who consented to tracking this device' }, { status: 400 })
   const clean = mac.replace(/[:\-]/g, '').toLowerCase().match(/../g)!.join(':')
   const id = deviceId('wifi', clean), ble_id = deviceId('ble', clean)
   await prisma.tracked_devices.upsert({
     where: { id },
-    create: { id, ble_id, label, consent, created_at: Date.now() / 1000 },
-    update: { label, consent },
+    create: { id, ble_id, created_at: Date.now() / 1000 },
+    update: {},
   })
   return NextResponse.json({ ok: true, id }, { status: 201 })
 }

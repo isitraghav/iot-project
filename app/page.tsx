@@ -252,14 +252,12 @@ export default function Page() {
             <div className="page-head">
               <div>
                 <h2 className="display">Tracking</h2>
-                <p className="lede">Follow devices of people who have agreed to it, such as your own phone or opted-in staff. The MAC address is hashed on save and never stored.</p>
+                <p className="lede">Add a MAC address to see where and when it appears across your billboards. The address is hashed on save and never stored.</p>
               </div>
             </div>
-            <form className="card filters bar" id="trackForm" autoComplete="off">
-              <input name="mac" placeholder="MAC address (aa:bb:cc:dd:ee:ff)" aria-label="MAC address" required />
-              <input name="label" placeholder="Label (e.g. My phone)" aria-label="Label" required />
-              <input name="consent" placeholder="Who consented (name / note)" aria-label="Consent" required />
-              <button type="submit" className="btn">Add device</button>
+            <form className="filters bar" id="trackForm" autoComplete="off">
+              <input type="text" name="mac" placeholder="MAC address (aa:bb:cc:dd:ee:ff)" aria-label="MAC address" required style={{ minWidth: 280 }} />
+              <button type="submit" className="btn primary">Add device</button>
             </form>
             <p className="muted small">Phones that randomize their MAC can only be followed while that address is in use.</p>
             <div className="card flush"><div className="tbl-wrap"><table className="tbl" id="trackTable" /></div></div>
