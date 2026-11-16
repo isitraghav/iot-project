@@ -13,3 +13,20 @@ __pycache__/
 node_modules/
 .next/
 .env.local
+
+.vercel
+
+# --- secrets / private device data / build artifacts (added) ---
+firmware/src/config.h
+data/
+*.db
+*.db-shm
+*.db-wal
+*.key
+*.pem
+__pycache__/
+*.pyc
+tsconfig.tsbuildinfo
+firmware/.pio/
+.env*
+!.env.example
