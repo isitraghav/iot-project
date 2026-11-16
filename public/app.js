@@ -341,8 +341,8 @@ function spark(values, endTs = Date.now() / 1000, unit = 'people') {
 }
 
 // ---------------------------------------------------------------- navigation
-const PAGES = ['fleet', 'audience', 'live', 'retention', 'devices', 'settings'];
-const TITLES = { fleet: 'Fleet', audience: 'Audience', live: 'Live', retention: 'Retention', devices: 'Devices', settings: 'Settings' };
+const PAGES = ['fleet', 'audience', 'live', 'retention', 'devices', 'tracking', 'settings'];
+const TITLES = { fleet: 'Fleet', audience: 'Audience', live: 'Live', retention: 'Retention', devices: 'Devices', tracking: 'Tracking', settings: 'Settings' };
 function go(page) {
   if (!PAGES.includes(page)) page = 'fleet';
   const changed = state.page !== page;
@@ -1162,11 +1162,37 @@ $('#settingsForm').onsubmit = async e => {
   } catch (err) { toast(err.message, 'error'); }
 };
 
+// ---------------------------------------------------------------- tracking (consent-registered, hashed devices)
+async function loadTracking() {
+  const rows = await api('/api/tracking?days=7');
+  $('#trackTable').innerHTML = '<thead><tr><th>Label</th><th>Consent</th><th class="num">Visits (7d)</th><th>Seen by</th><th>Last seen</th><th>Recent appearances</th><th></th></tr></thead><tbody>' +
+    (rows.length ? rows.map(r => `<tr>
+      <td>${esc(r.label)}</td><td class="muted">${esc(r.consent)}</td><td class="num">${r.visits}</td>
+      <td>${r.sensors.length ? esc(r.sensors.map(sensorName).join(', ')) : '<span class="muted">–</span>'}</td>
+      <td class="nowrap">${r.last_seen ? ago(r.last_seen) : '<span class="muted">never</span>'}</td>
+      <td class="small">${r.timeline.slice(0, 5).map(t => `${dateTime(t.start)} · ${esc(sensorName(t.sensor_id))} · ${t.max_rssi} dBm`).join('<br>') || '<span class="muted">–</span>'}</td>
+      <td><button type="button" class="link" data-untrack="${r.id}">Remove</button></td></tr>`).join('')
+      : '<tr class="empty-row"><td colspan="7">No tracked devices yet</td></tr>') + '</tbody>';
+}
+$('#trackForm').onsubmit = async e => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    await api('/api/tracking', json('POST', { mac: f.mac.value, label: f.label.value, consent: f.consent.value }));
+    f.reset(); toast('Device added (MAC hashed)'); loadTracking().catch(netError);
+  } catch (err) { toast(err.message, 'error'); }
+};
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-untrack]');
+  if (!b) return;
+  try { await api('/api/tracking/' + b.dataset.untrack, { method: 'DELETE' }); loadTracking().catch(netError); } catch (err) { toast(err.message, 'error'); }
+});
+
 // ---------------------------------------------------------------- refresh loop
 function refresh() {
   const p = state.page;
   const job = p === 'fleet' ? loadFleet() : p === 'audience' ? loadAudience() : p === 'live' ? loadLive()
-    : p === 'retention' ? loadRetention() : p === 'devices' ? loadDevices() : p === 'settings' ? loadSettings() : null;
+    : p === 'retention' ? loadRetention() : p === 'devices' ? loadDevices() : p === 'tracking' ? loadTracking() : p === 'settings' ? loadSettings() : null;
   if (p === 'live') window.Radar?.load();
   job?.catch(netError);
 }
@@ -1185,6 +1211,7 @@ setInterval(() => {
   if (p === 'fleet' || add || state.sheet?.kind === 'sensor' ? tick % 2 === 0 : tick % 6 === 0) loadFleet().catch(() => {});
   if (p === 'audience' && tick % 8 === 0) loadAudience().catch(() => {});
   if (p === 'devices' && tick % 4 === 0) loadDevices().catch(() => {});
+  if (p === 'tracking' && tick % 4 === 0) loadTracking().catch(() => {});
 }, 4000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
 

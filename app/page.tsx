@@ -5,6 +5,7 @@ const ICONS: Record<string, React.ReactNode> = {
   live: <><circle cx="12" cy="12" r="1.6" /><path d="M8.2 8.2a5.4 5.4 0 0 0 0 7.6M15.8 8.2a5.4 5.4 0 0 1 0 7.6M5.3 5.3a9.5 9.5 0 0 0 0 13.4M18.7 5.3a9.5 9.5 0 0 1 0 13.4" /></>,
   retention: <path d="M4.5 12a7.5 7.5 0 0 1 13.2-4.9M19.5 12a7.5 7.5 0 0 1-13.2 4.9M18 3.5v4h-4M6 20.5v-4h4" />,
   devices: <><path d="M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7l8.3 8.3a1 1 0 0 1 0 1.4l-7.3 7.3a1 1 0 0 1-1.4 0z" /><circle cx="8" cy="8" r="1.4" /></>,
+  tracking: <><circle cx="12" cy="12" r="3" /><path d="M12 3v3M12 18v3M3 12h3M18 12h3" /></>,
   settings: <><path d="M4 7h9M18 7h2M4 17h3M12 17h8" /><circle cx="15.5" cy="7" r="2.3" /><circle cx="9.5" cy="17" r="2.3" /></>,
 }
 const Icon = ({ name }: { name: string }) => (
@@ -13,7 +14,7 @@ const Icon = ({ name }: { name: string }) => (
 
 const NAV: [string, string][] = [
   ['fleet', 'Fleet'], ['audience', 'Audience'], ['live', 'Live'],
-  ['retention', 'Retention'], ['devices', 'Devices'], ['settings', 'Settings'],
+  ['retention', 'Retention'], ['devices', 'Devices'], ['tracking', 'Tracking'], ['settings', 'Settings'],
 ]
 
 const Seg = ({ id, attr, items, active }: { id: string; attr: string; items: [string, string][]; active: string }) => (
@@ -244,6 +245,24 @@ export default function Page() {
             <div className="card flush">
               <div className="tbl-wrap tall"><table className="tbl sticky" id="devTable" /></div>
             </div>
+          </section>
+
+          {/* TRACKING */}
+          <section className="page" id="page-tracking" aria-label="Tracking">
+            <div className="page-head">
+              <div>
+                <h2 className="display">Tracking</h2>
+                <p className="lede">Follow devices of people who have agreed to it, such as your own phone or opted-in staff. The MAC address is hashed on save and never stored.</p>
+              </div>
+            </div>
+            <form className="card filters bar" id="trackForm" autoComplete="off">
+              <input name="mac" placeholder="MAC address (aa:bb:cc:dd:ee:ff)" aria-label="MAC address" required />
+              <input name="label" placeholder="Label (e.g. My phone)" aria-label="Label" required />
+              <input name="consent" placeholder="Who consented (name / note)" aria-label="Consent" required />
+              <button type="submit" className="btn">Add device</button>
+            </form>
+            <p className="muted small">Phones that randomize their MAC can only be followed while that address is in use.</p>
+            <div className="card flush"><div className="tbl-wrap"><table className="tbl" id="trackTable" /></div></div>
           </section>
 
           {/* SETTINGS */}
