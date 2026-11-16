@@ -22,7 +22,7 @@ static const char    *FW_VERSION    = "billboard-cloud/1.0";
 static const uint32_t WIFI_DWELL_MS = 160;
 static const uint8_t  WIFI_CHANNELS = 13;
 static const uint32_t BLE_SCAN_SEC  = 2;
-static const int      MAX_DEVICES   = 160;
+static const int      MAX_DEVICES   = 256;
 
 enum Caps : uint8_t { CAP_HT = 1, CAP_VHT = 2, CAP_HE = 4, CAP_CONNECTED = 8, CAP_PROBE = 16, CAP_WPS = 32 };
 
@@ -245,10 +245,11 @@ class AdvCallbacks : public NimBLEAdvertisedDeviceCallbacks {
   }
 };
 
+// BLE scans continuously in the background (NimBLE task) so phones are heard
+// during WiFi hopping and HTTP uploads too, not just in a 2 s window per cycle.
 static void blePhase() {
   NimBLEScan *scan = NimBLEDevice::getScan();
-  scan->start(BLE_SCAN_SEC, false);
-  scan->clearResults();
+  if (!scan->isScanning()) scan->start(0, nullptr, false);
 }
 
 // ─────────────────────────────────────────────── Output / HTTP
@@ -303,6 +304,7 @@ static bool postBatch() {
   WiFiClientSecure client;
   client.setInsecure(); // skip cert validation — fine for a local/LAN server too
   HTTPClient http;
+  http.setTimeout(15000);
   http.begin(client, url);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Authorization", "Bearer " DEVICE_API_KEY);
@@ -399,7 +401,7 @@ void setup() {
   NimBLEDevice::init("");
   NimBLEScan *scan = NimBLEDevice::getScan();
   scan->setAdvertisedDeviceCallbacks(new AdvCallbacks(), true);
-  scan->setActiveScan(true); scan->setInterval(100); scan->setWindow(90); scan->setMaxResults(0);
+  scan->setActiveScan(true); scan->setInterval(100); scan->setWindow(100); // window == interval: radio listens 100% of the time scan->setMaxResults(0);
 
   // Send a hello line both to serial and as first HTTP POST
   char hello[200];
@@ -416,7 +418,7 @@ void loop() {
   // Reconnect WiFi if lost (non-blocking check)
   if (WiFi.status() != WL_CONNECTED) { wifiReady = false; connectWifi(); }
   cycle++;
-  wifiPhase();
   blePhase();
+  wifiPhase();
   flush();
 }

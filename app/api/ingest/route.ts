@@ -15,6 +15,6 @@ export async function POST(req: NextRequest) {
   const msgs = (body.msgs ?? []) as Record<string, unknown>[]
   if (!msgs.length) return NextResponse.json({ ok: true, processed: 0 })
 
-  await processBatch(msgs, Date.now() / 1000, sensor.id)
+  await processBatch(msgs, Date.now() / 1000, sensor.id, sensor.uptime)
   return NextResponse.json({ ok: true, processed: msgs.length })
 }

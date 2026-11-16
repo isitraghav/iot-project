@@ -43,16 +43,22 @@ function coerce(key: string, raw: string): number | string {
   return raw
 }
 
+let cache: { at: number; value: Settings } | null = null
+const SETTINGS_TTL_MS = 10_000
+
 export async function getSettings(): Promise<Settings> {
+  if (cache && Date.now() - cache.at < SETTINGS_TTL_MS) return cache.value
   const rows = await prisma.settings.findMany()
   const out: Record<string, number | string> = { ...DEFAULT_SETTINGS }
   for (const r of rows) {
     if (r.key in DEFAULT_SETTINGS) out[r.key] = coerce(r.key, r.value)
   }
-  return out as unknown as Settings
+  cache = { at: Date.now(), value: out as unknown as Settings }
+  return cache.value
 }
 
 export async function saveSettings(values: Record<string, string | number>): Promise<void> {
+  cache = null
   const ops = Object.entries(values)
     .filter(([k]) => k in DEFAULT_SETTINGS)
     .map(([k, v]) =>
