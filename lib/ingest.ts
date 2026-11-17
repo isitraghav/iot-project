@@ -1,14 +1,20 @@
 import { createHmac } from 'crypto'
 import { Prisma } from '@prisma/client'
 import { prisma } from './prisma'
-import { getSettings } from './settings'
+import { getSettings, Settings } from './settings'
 import { classify, mergeDetails, detailsFromMsg, displayName } from './classify'
 import { deviceVendor, mdCompany, normMac } from './vendors'
 
+// ---------------------------------------------------------------------------
+// Device IDs: a salted hash of the MAC, so raw MAC addresses are never the key
+// ---------------------------------------------------------------------------
+
 let warnedSalt = false
+
 function getHmacSalt(): Buffer {
-  const s = process.env.HMAC_SALT
-  if (s) return Buffer.from(s, 'hex')
+  const configured = process.env.HMAC_SALT
+  if (configured) return Buffer.from(configured, 'hex')
+
   if (process.env.NODE_ENV === 'production' && !warnedSalt) {
     warnedSalt = true
     console.warn('HMAC_SALT is not set; deriving the MAC-hash salt from DATABASE_URL. Set HMAC_SALT (and keep it stable).')
@@ -19,15 +25,19 @@ function getHmacSalt(): Buffer {
 }
 
 export function deviceId(kind: string, mac: string): string {
-  const salt = getHmacSalt()
-  return createHmac('sha256', salt).update(`${kind}|${mac.toLowerCase()}`).digest('hex').slice(0, 12)
+  return createHmac('sha256', getHmacSalt()).update(`${kind}|${mac.toLowerCase()}`).digest('hex').slice(0, 12)
 }
 
+// ---------------------------------------------------------------------------
+// Types and constants
+// ---------------------------------------------------------------------------
+
+/** A visit that is still "open": the device was seen again within visit_gap_s of its last sighting. */
 interface OpenVisit {
   id: bigint | null // null = created in this batch, not inserted yet
   dev?: string
   start?: number
-  dirty?: boolean
+  dirty?: boolean // changed in this batch, needs an UPDATE
   end: number
   maxRssi: number
   samples: number
@@ -35,74 +45,209 @@ interface OpenVisit {
   phoneUse: number
 }
 
+/** Everything we will write to the database at the end of the batch. */
 interface Pending {
   devices: Map<string, Prisma.Sql>
   minutes: Map<string, { minute: number; dev: string; rssi: number; hits: number; sensor: string }>
   visits: OpenVisit[]
 }
 
-export async function processBatch(
-  msgs: Record<string, unknown>[], ts: number, sensorId: string, prevUptime: number | null = null,
-) {
-  // Collect device IDs we'll need
-  const deviceIds = new Set<string>()
-  for (const msg of msgs) {
-    const t = msg.t as string
-    if (t === 'w' || t === 'b' || t === 'a') {
-      const mac = msg.m as string
-      if (!mac) continue
-      const kind = t === 'w' ? 'wifi' : t === 'a' ? 'ap' : 'ble'
-      deviceIds.add(deviceId(kind, mac))
-    }
-  }
-  const ids = [...deviceIds]
+type Message = Record<string, unknown>
+type DeviceKind = 'wifi' | 'ble' | 'ap'
 
-  // Settings (cached) and existing devices load in parallel
-  const [s, devRows] = await Promise.all([
-    getSettings(),
+/** Message types from the ESP32: w = WiFi probe, b = BLE advertisement, a = access point beacon. */
+const KIND_BY_MESSAGE_TYPE: Record<string, DeviceKind> = { w: 'wifi', b: 'ble', a: 'ap' }
+
+/** Ignore anything weaker than this; it's too far away to be meaningful. */
+const MIN_RSSI = -95
+
+// ---------------------------------------------------------------------------
+// Processing a batch of messages from one sensor
+// ---------------------------------------------------------------------------
+
+export async function processBatch(
+  msgs: Message[], ts: number, sensorId: string, prevUptime: number | null = null,
+) {
+  const sightings = msgs.filter(msg => (msg.t as string) in KIND_BY_MESSAGE_TYPE)
+
+  // Collect every device in the batch up front so we query the database once, not once per message
+  const ids = [...new Set(
+    sightings.filter(msg => msg.m).map(msg => deviceId(KIND_BY_MESSAGE_TYPE[msg.t as string], msg.m as string)),
+  )]
+
+  const [s, deviceRows] = await Promise.all([
+    getSettings(), // cached
     ids.length ? prisma.devices.findMany({ where: { id: { in: ids } } }) : Promise.resolve([]),
   ])
   const existingDevices = new Map<string, Record<string, unknown>>()
-  for (const r of devRows) existingDevices.set(r.id, r as unknown as Record<string, unknown>)
+  for (const row of deviceRows) existingDevices.set(row.id, row as unknown as Record<string, unknown>)
 
-  // Load open visits
-  const openVisits = new Map<string, OpenVisit>()
-  if (ids.length) {
-    const vRows = await prisma.visits.findMany({
-      where: { device_id: { in: ids }, end: { gte: ts - s.visit_gap_s } },
-      orderBy: { end: 'desc' },
-    })
-    for (const v of vRows) {
-      if (!openVisits.has(v.device_id)) {
-        openVisits.set(v.device_id, {
-          id: v.id, end: v.end, maxRssi: v.max_rssi,
-          samples: v.samples, phoneIdle: v.phone_idle, phoneUse: v.phone_use,
-        })
-      }
-    }
-  }
+  const openVisits = await loadOpenVisits(ids, ts, s.visit_gap_s)
 
-  // Process each message in memory
+  // Process every message in memory...
   const pending: Pending = { devices: new Map(), minutes: new Map(), visits: [] }
-  let hb: Record<string, unknown> | null = null
-  let hello: Record<string, unknown> | null = null
-  for (const msg of msgs) {
-    const t = msg.t as string
-    if (t === 'w' || t === 'b' || t === 'a') handleSighting(msg, ts, sensorId, s, existingDevices, openVisits, pending)
-    else if (t === 'hb') hb = msg
-    else if (t === 'hello') hello = msg
+  for (const msg of sightings) handleSighting(msg, ts, sensorId, s, existingDevices, openVisits, pending)
+  for (const visit of openVisits.values()) {
+    if (visit.id !== null && visit.dirty) pending.visits.push(visit)
   }
-  for (const ov of openVisits.values()) if (ov.id !== null && ov.dirty) pending.visits.push(ov)
 
-  // Flush: one statement per table, all in parallel
+  // ...then write once per table, all in parallel
   await Promise.all([
     flushDevices(pending),
     flushMinutes(pending),
     flushNewVisits(pending, sensorId),
     flushVisitUpdates(pending),
-    prisma.sensors.update({ where: { id: sensorId }, data: sensorHealth(ts, hb, hello, prevUptime) }),
+    prisma.sensors.update({
+      where: { id: sensorId },
+      data: sensorHealth(ts, lastOfType(msgs, 'hb'), lastOfType(msgs, 'hello'), prevUptime),
+    }),
   ])
 }
+
+function lastOfType(msgs: Message[], type: string): Message | null {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].t === type) return msgs[i]
+  }
+  return null
+}
+
+/** The most recent still-open visit for each device. */
+async function loadOpenVisits(deviceIds: string[], ts: number, visitGapS: number) {
+  const openVisits = new Map<string, OpenVisit>()
+  if (!deviceIds.length) return openVisits
+
+  const rows = await prisma.visits.findMany({
+    where: { device_id: { in: deviceIds }, end: { gte: ts - visitGapS } },
+    orderBy: { end: 'desc' },
+  })
+  for (const v of rows) {
+    if (openVisits.has(v.device_id)) continue // keep only the latest per device
+    openVisits.set(v.device_id, {
+      id: v.id, end: v.end, maxRssi: v.max_rssi,
+      samples: v.samples, phoneIdle: v.phone_idle, phoneUse: v.phone_use,
+    })
+  }
+  return openVisits
+}
+
+// ---------------------------------------------------------------------------
+// Handling one sighting
+// ---------------------------------------------------------------------------
+
+/** Is this MAC address randomized (i.e. not a stable hardware identity)? 1 = yes, 0 = no. */
+function isRandomized(msg: Message, kind: DeviceKind, mac: string): number {
+  const firstByte = parseInt(mac.slice(0, 2), 16)
+  if (kind === 'wifi') return parseInt(String(msg.rnd ?? 0))
+  if (kind === 'ap') return firstByte & 0x02 ? 1 : 0 // "locally administered" bit
+
+  // BLE: random address type, unless it's a static random address (top two bits = 11)
+  const isRandomAddressType = parseInt(String(msg.at ?? 0)) === 1
+  const isStaticRandom = firstByte >> 6 === 0b11
+  return isRandomAddressType && !isStaticRandom ? 1 : 0
+}
+
+/** Work out what kind of device this is, without downgrading an earlier high-confidence answer. */
+function classifyDevice(
+  kind: DeviceKind, details: Record<string, unknown>, name: string | null,
+  vendor: string | null, randomized: number, existing: Record<string, unknown> | undefined,
+): [string, string | null, string] {
+  const [type, model, confidence] = classify(kind, details, name, vendor, randomized)
+  if (existing?.confidence === 'high' && confidence === 'low') {
+    return [existing.dev_type as string, existing.model as string, 'high']
+  }
+  return [type, model, confidence]
+}
+
+/** Add this sighting to the per-minute stats (used for fixture detection and the live chart). */
+function recordMinute(pending: Pending, ts: number, dev: string, rssi: number, hits: number, sensorId: string) {
+  const minute = Math.floor(ts / 60)
+  const key = `${minute}|${dev}`
+  const existing = pending.minutes.get(key)
+  if (existing) {
+    existing.rssi = Math.max(existing.rssi, rssi)
+    existing.hits += hits
+  } else {
+    pending.minutes.set(key, { minute, dev, rssi, hits, sensor: sensorId })
+  }
+}
+
+/** Extend the device's open visit, or start a new one if there isn't one. */
+function recordVisit(
+  pending: Pending, openVisits: Map<string, OpenVisit>, visitGapS: number,
+  dev: string, ts: number, rssi: number, activity: unknown,
+) {
+  const phoneIdle = activity === 'idle' ? 1 : 0
+  const phoneUse = activity === 'in_use' ? 1 : 0
+  const open = openVisits.get(dev)
+
+  if (open && ts - open.end <= visitGapS) {
+    open.end = ts
+    open.maxRssi = Math.max(open.maxRssi, rssi)
+    open.samples++
+    open.phoneIdle += phoneIdle
+    open.phoneUse += phoneUse
+    open.dirty = true
+    return
+  }
+
+  const visit: OpenVisit = { id: null, dev, start: ts, end: ts, maxRssi: rssi, samples: 1, phoneIdle, phoneUse }
+  pending.visits.push(visit)
+  openVisits.set(dev, visit)
+}
+
+function handleSighting(
+  msg: Message,
+  ts: number,
+  sensorId: string,
+  s: Settings,
+  existingDevices: Map<string, Record<string, unknown>>,
+  openVisits: Map<string, OpenVisit>,
+  pending: Pending,
+) {
+  const rssi = parseInt(String(msg.r ?? -127))
+  const mac = msg.m as string
+  if (rssi < MIN_RSSI || !mac) return
+
+  const kind = KIND_BY_MESSAGE_TYPE[msg.t as string]
+  const hits = parseInt(String(msg.n ?? 1))
+  const randomized = isRandomized(msg, kind, mac)
+  const fingerprint = kind === 'wifi' ? ((msg.fp as string) || null) : null
+
+  // Identify the device and what we already know about it
+  const dev = deviceId(kind, mac)
+  const existing = existingDevices.get(dev)
+  const mfrCode = msg.mfr != null && Number(msg.mfr) >= 0 ? Number(msg.mfr) : mdCompany(msg.md as string)
+  const vendor = deviceVendor(kind, mac, randomized, mfrCode)
+
+  const previousDetails = existing?.details ? JSON.parse(existing.details as string) : {}
+  const details = mergeDetails(previousDetails, detailsFromMsg(msg))
+  const bleName = kind === 'ble' ? ((msg.name as string) || (existing?.name as string) || null) : null
+  const name = displayName(kind, details, bleName)
+  const [type, model, confidence] = classifyDevice(kind, details, name, vendor, randomized, existing)
+
+  const firstSeen = existing ? (existing.first_seen as number) : ts
+  const detailsJson = JSON.stringify(details)
+
+  pending.devices.set(dev, Prisma.join([
+    txt(dev), txt(kind), Prisma.sql`${randomized}::int`, txt(normMac(mac)),
+    txt(vendor), txt(fingerprint), txt(name), f8(firstSeen), f8(ts), Prisma.sql`${rssi}::int`,
+    txt(type), txt(model), txt(confidence), txt(detailsJson), txt(sensorId),
+  ]))
+  // Remember the new state so later messages in this batch see it
+  existingDevices.set(dev, {
+    ...existing, id: dev, kind, randomized, first_seen: firstSeen,
+    details: detailsJson, confidence, dev_type: type, model, name,
+  })
+
+  // Access points are tracked as devices only; they don't have visits
+  if (kind === 'ap') return
+  recordMinute(pending, ts, dev, rssi, hits, sensorId)
+  recordVisit(pending, openVisits, s.visit_gap_s, dev, ts, rssi, details.activity)
+}
+
+// ---------------------------------------------------------------------------
+// Writing to the database (one statement per table)
+// ---------------------------------------------------------------------------
 
 const f8 = (n: number) => Prisma.sql`${n}::float8`
 const txt = (v: string | null | undefined) => Prisma.sql`${v ?? null}::text`
@@ -146,111 +291,34 @@ async function flushVisitUpdates(p: Pending) {
     WHERE visits.id = v.id`)
 }
 
+// ---------------------------------------------------------------------------
+// Sensor health
+// ---------------------------------------------------------------------------
+
 // Sensor last_seen plus health telemetry from the batch's heartbeat / boot message
-function sensorHealth(ts: number, hb: Record<string, unknown> | null, hello: Record<string, unknown> | null, prevUptime: number | null) {
+function sensorHealth(ts: number, hb: Message | null, hello: Message | null, prevUptime: number | null) {
   const data: Record<string, unknown> = { last_seen: ts }
-  const int = (v: unknown) => (v == null || isNaN(Number(v)) ? undefined : Math.round(Number(v)))
+  const toInt = (v: unknown) => (v == null || isNaN(Number(v)) ? undefined : Math.round(Number(v)))
+
   if (hello) {
     data.fw = (hello.fw as string) || undefined
     data.chip = (hello.chip as string) || undefined
     data.mac = (hello.mac as string) || undefined
   }
+
   if (hb) {
-    const up = int(hb.up)
+    const uptime = toInt(hb.up)
     // Uptime going backwards means the ESP32 restarted since the last heartbeat
-    const rebooted = hello || (up != null && prevUptime != null && up < prevUptime)
+    const rebooted = hello || (uptime != null && prevUptime != null && uptime < prevUptime)
     Object.assign(data, {
       fw: (hb.fw as string) || data.fw, chip: (hb.chip as string) || data.chip,
-      uptime: up, heap: int(hb.heap), cycles: int(hb.cyc), dev_count: int(hb.dev), dropped: int(hb.drop),
+      uptime, heap: toInt(hb.heap), cycles: toInt(hb.cyc), dev_count: toInt(hb.dev), dropped: toInt(hb.drop),
       last_hb: ts,
-      ...(up != null ? { booted_at: ts - up } : {}),
+      ...(uptime != null ? { booted_at: ts - uptime } : {}),
       ...(rebooted && prevUptime != null ? { reboots: { increment: 1 } } : {}),
     })
-  } else if (hello && !hb) {
+  } else if (hello) {
     data.booted_at = ts
   }
   return data
-}
-
-function handleSighting(
-  msg: Record<string, unknown>,
-  ts: number,
-  sensorId: string,
-  s: ReturnType<typeof getSettings> extends Promise<infer T> ? T : never,
-  existingDevices: Map<string, Record<string, unknown>>,
-  openVisits: Map<string, OpenVisit>,
-  pending: Pending,
-) {
-  const rssi = parseInt(String(msg.r ?? -127))
-  if (rssi < -95) return
-
-  const t = msg.t as string
-  const mac = msg.m as string
-  if (!mac) return
-  const hits = parseInt(String(msg.n ?? 1))
-  const kind = t === 'w' ? 'wifi' : t === 'a' ? 'ap' : 'ble'
-
-  let randomized = 0
-  let fp: string | null = null
-
-  if (t === 'w') {
-    randomized = parseInt(String(msg.rnd ?? 0))
-    fp = (msg.fp as string) || null
-  } else if (t === 'a') {
-    randomized = (parseInt(mac.slice(0, 2), 16) & 0x02) ? 1 : 0
-  } else {
-    const first = parseInt(mac.slice(0, 2), 16)
-    randomized = (parseInt(String(msg.at ?? 0)) === 1 && (first >> 6) !== 0b11) ? 1 : 0
-  }
-
-  const dev = deviceId(kind, mac)
-  const macAddr = normMac(mac)
-  const mfr = msg.mfr != null && Number(msg.mfr) >= 0 ? Number(msg.mfr) : mdCompany(msg.md as string)
-  const vendor = deviceVendor(kind, mac, randomized, mfr)
-  const existing = existingDevices.get(dev)
-  const prevDetails = existing?.details ? JSON.parse(existing.details as string) : {}
-  const newDetails = detailsFromMsg(msg)
-  const details = mergeDetails(prevDetails, newDetails)
-  const bleName = t === 'b' ? ((msg.name as string) || (existing?.name as string) || null) : null
-  const name = displayName(kind, details, bleName)
-  const [devType, model, conf] = classify(kind, details, name, vendor, randomized)
-  const prevConf = existing?.confidence as string
-  const [finalType, finalModel, finalConf] =
-    prevConf === 'high' && conf === 'low'
-      ? [existing?.dev_type as string, existing?.model as string, 'high']
-      : [devType, model, conf]
-  const detailsJson = JSON.stringify(details)
-
-  pending.devices.set(dev, Prisma.join([
-    txt(dev), txt(kind), Prisma.sql`${randomized}::int`, txt(macAddr),
-    txt(vendor), txt(fp), txt(name), f8(existing ? (existing.first_seen as number) : ts), f8(ts), Prisma.sql`${rssi}::int`,
-    txt(finalType), txt(finalModel), txt(finalConf), txt(detailsJson), txt(sensorId),
-  ]))
-  existingDevices.set(dev, { ...(existing ?? {}), id: dev, kind, randomized, first_seen: existing ? existing.first_seen : ts, details: detailsJson, confidence: finalConf, dev_type: finalType, model: finalModel, name })
-
-  if (kind !== 'ap') {
-    const minute = Math.floor(ts / 60)
-    const mk = `${minute}|${dev}`
-    const pm = pending.minutes.get(mk)
-    if (pm) { pm.rssi = Math.max(pm.rssi, rssi); pm.hits += hits }
-    else pending.minutes.set(mk, { minute, dev, rssi, hits, sensor: sensorId })
-
-    const act = details.activity as string | undefined
-    const idle = act === 'idle' ? 1 : 0
-    const use = act === 'in_use' ? 1 : 0
-    const ov = openVisits.get(dev)
-
-    if (ov && ts - ov.end <= s.visit_gap_s) {
-      ov.end = ts
-      ov.maxRssi = Math.max(ov.maxRssi, rssi)
-      ov.samples++
-      ov.phoneIdle += idle
-      ov.phoneUse += use
-      ov.dirty = true
-    } else {
-      const nv: OpenVisit = { id: null, dev, start: ts, end: ts, maxRssi: rssi, samples: 1, phoneIdle: idle, phoneUse: use }
-      pending.visits.push(nv)
-      openVisits.set(dev, nv)
-    }
-  }
 }

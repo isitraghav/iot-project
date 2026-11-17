@@ -15,23 +15,22 @@ phones / watches ─WiFi probes + BLE─▶ ESP32 ─HTTPS POST /api/ingest (Bea
 
 | Path | What |
 |---|---|
+| `packet-tracer/` | Cisco Packet Tracer simulation of the whole system (scripts + build guide) |
 | `firmware/` | PlatformIO project for the ESP32 sniffer (WiFi posts batches to the server) |
 | `app/` | Next.js app: dashboard shell (`page.tsx`) and REST API (`app/api/*`) |
 | `lib/` | Ingest + sessionization, analytics, device classification, fleet health, settings |
 | `public/` | Dashboard UI (vanilla JS + Chart.js) |
 | `prisma/schema.prisma` | Postgres schema |
-| `middleware.ts` | Basic-auth gate for everything except `/api/ingest` and `/api/health` |
 
 ## Deploy
 
 1. Create a Postgres database (Supabase/Neon). Use the pooled URL for `DATABASE_URL` and the direct URL for `DIRECT_URL`.
 2. Set the environment variables from `.env.example` on your host. Required in production:
    - `DATABASE_URL`, `DIRECT_URL`
-   - `DASHBOARD_PASSWORD`: without it the app answers 503 instead of running open
    - `HMAC_SALT`: `openssl rand -hex 32`. Set once and never change it, or all device history becomes unlinkable
    - `SENSOR_WIFI_SSID`, `SENSOR_WIFI_PASSWORD`, optionally `PUBLIC_URL`: baked into generated sensor `config.h`
 3. `npm install && npx prisma db push` (once, to create tables), then deploy (`npm run build` runs `prisma generate`).
-4. Monitor `GET /api/health` (unauthenticated, checks the DB).
+4. Monitor `GET /api/health` (checks the DB).
 
 Local dev: `cp .env.example .env`, fill it in, `npm run dev`. `npm run typecheck` runs `tsc`.
 
