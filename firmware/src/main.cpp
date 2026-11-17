@@ -56,6 +56,8 @@ static Entry table[MAX_DEVICES];
 static portMUX_TYPE tableMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint8_t currentChannel = 1;
 static uint32_t cycle = 0;
+static uint8_t  apChannel = 0;
+static uint8_t  postFailures = 0;
 static uint32_t dropped = 0;
 static volatile uint32_t mgmtFrames = 0;
 
@@ -199,6 +201,9 @@ static void wifiPhase() {
     delay(WIFI_DWELL_MS);
   }
   esp_wifi_set_promiscuous(false);
+  // Hopping leaves the radio on the last sniffed channel; return to the AP's
+  // channel or the station link silently breaks and uploads fail (HTTP -1).
+  if (apChannel) esp_wifi_set_channel(apChannel, WIFI_SECOND_CHAN_NONE);
 }
 
 // ─────────────────────────────────────────────── BLE
@@ -312,6 +317,7 @@ static bool postBatch() {
   http.end();
 
   if (code == 200 || code == 204) {
+    postFailures = 0;
     Serial.printf("[http] POST ok (%d msgs, %d bytes)\n", batchCount, body.length());
     return true;
   }
