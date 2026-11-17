@@ -311,7 +311,7 @@ window.initSim = function initSim() {
     ctx.beginPath(); ctx.arc(sx, sy, 3 + pulse * 12, 0, Math.PI * 2); ctx.stroke();
     ctx.globalAlpha = 1; ctx.fillStyle = c.accent; ctx.strokeStyle = c.surface; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(sx, sy, 4, 0, Math.PI * 2); ctx.stroke(); ctx.fill();
-    if (w > 520) { ctx.fillStyle = c.muted; ctx.font = '10px system-ui, sans-serif'; ctx.fillText('ESP32 sensor', sx, sy - 9); }
+    if (w > 520) { ctx.fillStyle = c.muted; ctx.font = '10px system-ui, sans-serif'; ctx.textAlign = 'left'; ctx.fillText('ESP32 sensor', sx + 10, sy - 5); }
 
     if (sim.mode === 'sim') drawPeople(ctx, c, s, now); else drawReal(ctx, c);
   }
