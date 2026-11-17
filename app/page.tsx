@@ -6,6 +6,7 @@ const ICONS: Record<string, React.ReactNode> = {
   retention: <path d="M4.5 12a7.5 7.5 0 0 1 13.2-4.9M19.5 12a7.5 7.5 0 0 1-13.2 4.9M18 3.5v4h-4M6 20.5v-4h4" />,
   devices: <><path d="M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7l8.3 8.3a1 1 0 0 1 0 1.4l-7.3 7.3a1 1 0 0 1-1.4 0z" /><circle cx="8" cy="8" r="1.4" /></>,
   tracking: <><circle cx="12" cy="12" r="3" /><path d="M12 3v3M12 18v3M3 12h3M18 12h3" /></>,
+  simulation: <><rect x="7.5" y="3.5" width="9" height="5.5" rx="1.2" /><path d="M12 9v3" /><circle cx="5.5" cy="16" r="2" /><circle cx="18.5" cy="16" r="2" /><path d="M2.5 21a3 3 0 0 1 6 0M15.5 21a3 3 0 0 1 6 0M9.5 14.5l1.5 1M14.5 14.5l-1.5 1" /></>,
   settings: <><path d="M4 7h9M18 7h2M4 17h3M12 17h8" /><circle cx="15.5" cy="7" r="2.3" /><circle cx="9.5" cy="17" r="2.3" /></>,
 }
 const Icon = ({ name }: { name: string }) => (
@@ -14,7 +15,7 @@ const Icon = ({ name }: { name: string }) => (
 
 const NAV: [string, string][] = [
   ['fleet', 'Fleet'], ['audience', 'Audience'], ['live', 'Live'],
-  ['retention', 'Retention'], ['devices', 'Devices'], ['tracking', 'Tracking'], ['settings', 'Settings'],
+  ['retention', 'Retention'], ['devices', 'Devices'], ['tracking', 'Tracking'], ['simulation', 'Simulation'], ['settings', 'Settings'],
 ]
 
 const Seg = ({ id, attr, items, active }: { id: string; attr: string; items: [string, string][]; active: string }) => (
@@ -261,6 +262,75 @@ export default function Page() {
             </form>
             <p className="muted small">Phones that randomize their MAC can only be followed while that address is in use.</p>
             <div className="card flush"><div className="tbl-wrap"><table className="tbl" id="trackTable" /></div></div>
+          </section>
+
+          {/* SIMULATION */}
+          <section className="page" id="page-simulation" aria-label="Simulation">
+            <div className="page-head">
+              <div>
+                <h2 className="display">Simulation</h2>
+                <p className="lede" id="simLede">Drag people onto the street to see what the sensor would hear and how they&rsquo;d be counted.</p>
+              </div>
+              <Seg id="simMode" attr="mode" active="sim" items={[['sim', 'Simulation'], ['real', 'Real-world data']]} />
+            </div>
+            <div className="kpis" id="simKpis" />
+            <div className="sim-grid">
+              <div className="card sim-palette" id="simPalette">
+                <div className="sim-block">
+                  <h3>People</h3>
+                  <p className="sub">Drag onto the street, or tap to add</p>
+                  <div className="sim-items" id="simPeople" />
+                </div>
+                <div className="sim-block">
+                  <h3>Devices</h3>
+                  <p className="sub">Drag onto a person, or tap to give one to the selected person</p>
+                  <div className="sim-items chips" id="simDevices" />
+                </div>
+                <div className="sim-block">
+                  <h3>Foot traffic</h3>
+                  <div className="sim-ctl">
+                    <button type="button" className="btn sm" id="simPlay" aria-pressed="true">Pause</button>
+                    <Seg id="simSpeed" attr="speed" active="1" items={[['1', '1×'], ['5', '5×'], ['20', '20×']]} />
+                  </div>
+                  <label className="sim-range">
+                    <span>Walkers <b id="simRateVal">6</b>/min</span>
+                    <input type="range" id="simRate" min="0" max="40" step="1" defaultValue="6" aria-label="Walkers per minute" />
+                  </label>
+                  <label className="chk"><input type="checkbox" id="simNoise" defaultChecked /> Signal noise (±4 dB)</label>
+                  <button type="button" className="btn sm danger-quiet" id="simClear">Clear scene</button>
+                </div>
+                <div className="sim-lock" id="simLock">
+                  <p><b>Showing real devices.</b> Switch to Simulation to place people.</p>
+                </div>
+              </div>
+              <div className="card sim-stage-card">
+                <div className="card-h wrap">
+                  <h3 id="simStageTitle">Street</h3>
+                  <span className="muted small" id="simClock" />
+                </div>
+                <div className="sim-stage" id="simStage">
+                  <canvas id="simCanvas" aria-label="Billboard scene. People and devices around the billboard sensor." role="img" />
+                  <div className="sim-msg hidden" id="simMsg" />
+                </div>
+                <div className="type-legend" id="simLegend" />
+                <p className="sub foot" id="simFoot">Shaded circles are the viewer and passer-by zones for phones (WiFi). Dashed circles are the zones for BLE wearables. Drag a person off the street to remove them.</p>
+              </div>
+              <div className="card sim-inspect" id="simInspect" />
+            </div>
+            <div className="grid2">
+              <div className="card">
+                <div className="card-h"><h3>Counted vs actual</h3><span className="muted small" id="simChartNote">Every 4 s sensor cycle</span></div>
+                <div className="chart short"><canvas id="cSim" /></div>
+              </div>
+              <div className="card">
+                <div className="card-h"><h3>Sensor output</h3><span className="muted small">What the ESP32 would POST this cycle</span></div>
+                <pre className="sim-feed" id="simFeed" />
+              </div>
+            </div>
+            <div className="card flush">
+              <div className="card-h sim-pad"><h3>Visits</h3><span className="muted small" id="simVisitNote" /></div>
+              <div className="tbl-wrap"><table className="tbl" id="simVisits" /></div>
+            </div>
           </section>
 
           {/* SETTINGS */}

@@ -106,7 +106,7 @@ function placeTip(x, y) {
   tip.style.top = (y + 16 + tip.offsetHeight > innerHeight ? y - tip.offsetHeight - 10 : y + 16) + 'px';
 }
 document.addEventListener('mousemove', e => {
-  if (e.target.closest?.('#radarCanvas')) return;
+  if (e.target.closest?.('#radarCanvas, #simCanvas')) return;
   const t = e.target.closest?.('[data-tip]');
   if (!t) { tip.classList.add('hidden'); return; }
   tip.textContent = t.dataset.tip;
@@ -304,6 +304,7 @@ function rerenderCharts() {
     if (state.data.bands) { renderRings(state.data.bands); renderTypeBands(state.data.bands); }
     if (state.data.live) renderLive(state.data.live);
     if (state.data.retention) renderRetention(state.data.retention);
+    window.Sim?.redrawChart();
     if (state.sheet?.kind === 'sensor') renderSensorLive();
     if (state.sheet?.kind === 'device' && state.data.device) renderDeviceChart(state.data.device);
   });
@@ -341,8 +342,8 @@ function spark(values, endTs = Date.now() / 1000, unit = 'people') {
 }
 
 // ---------------------------------------------------------------- navigation
-const PAGES = ['fleet', 'audience', 'live', 'retention', 'devices', 'tracking', 'settings'];
-const TITLES = { fleet: 'Fleet', audience: 'Audience', live: 'Live', retention: 'Retention', devices: 'Devices', tracking: 'Tracking', settings: 'Settings' };
+const PAGES = ['fleet', 'audience', 'live', 'retention', 'devices', 'tracking', 'simulation', 'settings'];
+const TITLES = { fleet: 'Fleet', audience: 'Audience', live: 'Live', retention: 'Retention', devices: 'Devices', tracking: 'Tracking', simulation: 'Simulation', settings: 'Settings' };
 function go(page) {
   if (!PAGES.includes(page)) page = 'fleet';
   const changed = state.page !== page;
@@ -1194,6 +1195,7 @@ function refresh() {
   const job = p === 'fleet' ? loadFleet() : p === 'audience' ? loadAudience() : p === 'live' ? loadLive()
     : p === 'retention' ? loadRetention() : p === 'devices' ? loadDevices() : p === 'tracking' ? loadTracking() : p === 'settings' ? loadSettings() : null;
   if (p === 'live') window.Radar?.load();
+  if (p === 'simulation') window.Sim?.activate();
   job?.catch(netError);
 }
 function skeleton() {
@@ -1221,3 +1223,4 @@ api('/api/settings').then(s => { state.settings = s; renderOrgName(s); }).catch(
 loadFleet().catch(netError).finally(() => go(location.hash.slice(1) || 'fleet'));
 window.appReady = true;
 if (window.initRadar) window.initRadar();
+if (window.initSim) window.initSim();

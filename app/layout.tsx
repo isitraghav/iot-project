@@ -25,6 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
         <Script src="/app.js" strategy="afterInteractive" />
         <Script src="/radar.js" strategy="afterInteractive" />
+        <Script src="/sim.js" strategy="afterInteractive" />
       </body>
     </html>
   )
