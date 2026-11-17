@@ -1,3 +1,4 @@
+import { readJson, badRequest } from '@/lib/http'
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { fleet } from '@/lib/fleet'
@@ -8,7 +9,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json()
+  const body = await readJson(req)
+  if (!body) return badRequest()
   const name = (body.name as string)?.trim()
   if (!name) return NextResponse.json({ error: 'name required' }, { status: 400 })
 

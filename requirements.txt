@@ -1,6 +1,0 @@
-fastapi
-uvicorn[standard]
-pyserial
-psycopg2-binary
-platformio
-esptool

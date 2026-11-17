@@ -1,3 +1,4 @@
+import { readJson, badRequest } from '@/lib/http'
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { deviceId } from '@/lib/ingest'
@@ -27,7 +28,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json()
+  const body = await readJson(req)
+  if (!body) return badRequest()
   const mac = String(body.mac ?? '').trim()
   if (!MAC_RE.test(mac)) return NextResponse.json({ error: 'Enter a valid MAC address' }, { status: 400 })
   const clean = mac.replace(/[:\-]/g, '').toLowerCase().match(/../g)!.join(':')

@@ -3,97 +3,58 @@
 Estimates how many people pass and look at a billboard, how long they stay and
 how many come back. An ESP32 passively listens for WiFi probe requests and BLE
 advertisements from nearby phones and wearables. It streams what it hears over
-USB to this PC, where a Python service stores it and serves a live dashboard.
+WiFi to a cloud API, which stores it in Postgres and serves a live dashboard.
+
+## Architecture
 
 ```
- phones / watches ──WiFi probes + BLE adverts──▶ ESP32 ──USB serial (JSON lines)──▶ server/app.py ──▶ SQLite
+phones / watches ─WiFi probes + BLE─▶ ESP32 ─HTTPS POST /api/ingest (Bearer key)─▶ Next.js on Vercel ─▶ Postgres (Supabase)
                                                                                         │
-                                                                         browser ◀──────┘ http://localhost:8000
+                                                                     browser ◀──────────┘  dashboard (Basic auth)
 ```
-
-## Production service (Linux)
-
-The dashboard runs as a systemd user service. It starts on boot (linger is
-enabled) and restarts on crash. Open http://localhost:8000.
-
-```bash
-systemctl --user status billboard      # state
-journalctl --user -u billboard -f      # logs
-systemctl --user restart billboard     # after code changes
-```
-
-The unit file is `~/.config/systemd/user/billboard.service`. To open the
-dashboard to your LAN, change `--host 127.0.0.1` to `0.0.0.0` there. The
-dashboard has no login, so anyone on the network could see it.
-
-On Windows, just keep `run.bat` running in a terminal. To auto-start on login,
-create a Task Scheduler task that runs `run.bat` at logon (or wrap it in a
-`.ps1` that stays in the background).
-
-## Layout
 
 | Path | What |
 |---|---|
-| `firmware/` | PlatformIO project for the ESP32 sniffer |
-| `server/app.py` | FastAPI server: REST API, WebSocket live feed, static dashboard |
-| `server/ingest.py` | Serial reader, MAC hashing, visit sessionization, traffic simulator |
-| `server/analytics.py` | KPIs, zones, dwell, heatmap, retention cohorts |
-| `server/static/` | Dashboard UI (vanilla JS + Chart.js) |
-| `data/` | `billboard.db` and the secret `salt.key` (created on first run) |
+| `firmware/` | PlatformIO project for the ESP32 sniffer (WiFi posts batches to the server) |
+| `app/` | Next.js app: dashboard shell (`page.tsx`) and REST API (`app/api/*`) |
+| `lib/` | Ingest + sessionization, analytics, device classification, fleet health, settings |
+| `public/` | Dashboard UI (vanilla JS + Chart.js) |
+| `prisma/schema.prisma` | Postgres schema |
+| `middleware.ts` | Basic-auth gate for everything except `/api/ingest` and `/api/health` |
 
-## Setup
+## Deploy
 
-### Windows
+1. Create a Postgres database (Supabase/Neon). Use the pooled URL for `DATABASE_URL` and the direct URL for `DIRECT_URL`.
+2. Set the environment variables from `.env.example` on your host. Required in production:
+   - `DATABASE_URL`, `DIRECT_URL`
+   - `DASHBOARD_PASSWORD`: without it the app answers 503 instead of running open
+   - `HMAC_SALT`: `openssl rand -hex 32`. Set once and never change it, or all device history becomes unlinkable
+   - `SENSOR_WIFI_SSID`, `SENSOR_WIFI_PASSWORD`, optionally `PUBLIC_URL`: baked into generated sensor `config.h`
+3. `npm install && npx prisma db push` (once, to create tables), then deploy (`npm run build` runs `prisma generate`).
+4. Monitor `GET /api/health` (unauthenticated, checks the DB).
 
-```bat
-rem Install Python env (requires uv: https://github.com/astral-sh/uv)
-uv venv .venv
-uv pip install -p .venv -r requirements.txt
+Local dev: `cp .env.example .env`, fill it in, `npm run dev`. `npm run typecheck` runs `tsc`.
 
-rem Flash the ESP32 (connect it first; check Device Manager for the COM port)
-flash.bat
+## Adding a sensor
 
-rem Run the dashboard against the real sensor
-run.bat
-
-rem Or demo with no hardware: 14 days of synthetic history + live simulated traffic
-run.bat --simulate --backfill 14
-```
-
-The ESP32 will appear as a COM port (e.g. `COM3`) in Device Manager under
-*Ports (COM & LPT)* — install the CP210x or CH340 driver if it shows as unknown.
-Pass `--port COM3` if auto-detect misses it.
-
-### Linux / macOS
+1. In the dashboard open **Fleet → Add billboard**; it downloads a `config.h` with that sensor's key, WiFi and server URL.
+2. Save it as `firmware/src/config.h` (git-ignored), connect the ESP32 and flash:
 
 ```bash
-# one-time: serial port access (log out/in afterwards)
-sudo usermod -aG dialout $USER
-
-# Python env (already created in .venv)
-uv venv .venv && uv pip install -p .venv -r requirements.txt
-
-# flash the ESP32
-./flash.sh                 # = pio run -t upload in firmware/
-
-# run the dashboard against the real sensor
-./run.sh                   # opens on http://localhost:8000
-
-# or demo with no hardware: 14 days of synthetic history + live simulated traffic
-./run.sh --simulate --backfill 14
+pip install -r firmware/requirements.txt
+flash.bat COM3        # Windows   (no args lists COM ports)
+./flash.sh            # Linux / macOS
 ```
 
-Options: `--port COM3` / `--port /dev/ttyUSB0` (default: auto-detect CP210x/CH340/FTDI/Espressif),
-`--host 0.0.0.0` to open the dashboard to your LAN, `--http-port 8000`.
-Use `BILLBOARD_DATA=C:\path\to\dir` (Windows) or `BILLBOARD_DATA=/some/dir` (Linux) to keep a
-separate database, e.g. for demos.
+On Windows the ESP32 shows as a COM port in Device Manager; install the CP210x or CH340 driver if it is unknown.
+Rotating a sensor's key disconnects it until you flash a new `config.h`.
 
 ## How it works
 
 **Sensing (firmware).** Each ~4 s cycle hops WiFi channels 1–13 in promiscuous
 mode (160 ms each) and captures probe requests. Then it runs a 2 s passive BLE
 scan. Sightings are aggregated per device per cycle (peak RSSI, hit count) and
-printed as one JSON line each, followed by a heartbeat line:
+batched as JSON lines (one per device, plus a heartbeat) and POSTed to `/api/ingest`:
 
 ```json
 {"t":"w","m":"da:a1:19:..","r":-58,"n":3,"ch":6,"rnd":1,"fp":"9c1e44a0","ssid":""}
@@ -105,9 +66,9 @@ printed as one JSON line each, followed by a heartbeat line:
 stays the same when a phone randomizes its MAC, so the server can merge
 randomized WiFi MACs that belong to the same device model.
 
-**Privacy.** MAC addresses never touch disk. Each is replaced by
-`HMAC-SHA256(salt, kind|mac)[:12]` with a random per-install salt in
-`data/salt.key`. If you delete the salt, all IDs become unlinkable.
+**Privacy.** Raw MAC addresses are not stored. Each is replaced by
+`HMAC-SHA256(salt, kind|mac)[:12]` using the secret `HMAC_SALT`. If the salt
+changes, all IDs become unlinkable.
 
 **Visits.** A device's sightings are merged into a *visit* until it goes unseen
 for `visit_gap_s` (default 5 min). Each visit stores its start, end and peak
@@ -159,7 +120,7 @@ What the sensor captures per device (firmware 1.1):
 | WiFi data frames | clients connected to nearby APs (+ which AP); catches phones that rarely probe |
 | Beacons | nearby access points and their SSIDs (shown on the radar, never counted as audience) |
 
-`server/classify.py` turns this into a type (phone, computer, wearable, audio,
+`lib/classify.ts` turns this into a type (phone, computer, wearable, audio,
 TV/media, tracker, AP, other) and a model. It uses Apple Continuity messages
 (AirPods models, Watch, Find My, Handoff…), Microsoft CDP beacons (Windows
 laptop/desktop, Xbox), GAP appearance, service UUIDs (Fast Pair, Tile,
@@ -169,13 +130,13 @@ marked *(guess)*.
 **Privacy note.** Device names often contain people's names ("Raghav's
 iPhone"), and probed SSIDs can reveal home and work networks. That defeats
 MAC hashing. For a public deployment, consider dropping `name`, `ssids` and
-`wps_name` in `classify.details_from_msg`.
+`wps_name` in `detailsFromMsg` in `lib/classify.ts`.
 
 ## Phone attention (Apple screen state)
 
 iPhones, iPads and Macs broadcast an "activity" nibble in their BLE Nearby
 Info advert (reverse-engineered — furiousMAC / Martin et al. 2019, so treat it
-as approximate). `classify.apple_activity` decodes it into three states:
+as approximate). `lib/classify.ts` decodes it into three states:
 
 - **idle** — screen off / locked (and Apple Watch on wrist)
 - **in use** — screen on, watching video, on a call
@@ -189,27 +150,20 @@ their phone. It only covers Apple devices that advertised a state
 The radar tooltip, the Live table and each device's visit history show the
 state too.
 
-## Linking rotated addresses
+## Linking rotated addresses (not yet ported)
 
-Phones rotate their BLE address ~every 15 min and randomize WiFi MACs, so one
-person shows up as many devices — inflating counts and hiding retention.
-`linker.py` runs every 20 s and groups an address that just appeared with one
-that just went silent, when they share the same advert signature (Apple/MS
-message types, services, TX power, WiFi fingerprint, name), a similar RSSI, and
-a short time gap — and only when there's a single clear candidate (ambiguous
-matches in a crowd are left alone, since a wrong merge joins two people).
-
-Grouped addresses share one `entity_id`, so est. people, dwell, viewers and
-engagement are counted per phone. A device's panel shows how many addresses
-were linked. Turn it off with **Link rotated addresses** in Settings. This is
-best-effort de-anonymisation of rotating identifiers for counting; it never
-recovers a real identity, and it respects the same MAC hashing.
+Phones rotate BLE addresses about every 15 min, so one person can appear as
+several devices. The old Python service ran a linker that grouped them via a
+shared `entity_id`. That linker was not ported to the Next.js rewrite: the
+`entity_id` column and the **Link rotated addresses** setting exist but nothing
+populates them yet, so est. people is currently counted per device ID (WiFi
+randomized MACs are still merged by probe fingerprint).
 
 ## Calibration (do this on site)
 
 1. Mount the ESP where the billboard is. A higher mount with a clear line of
    sight to the street works best.
-2. Run `./run.sh`, open the **Live** tab, and tag your own phone.
+2. Open the dashboard's **Live** tab, and tag your own phone.
 3. Stand where a viewer would stand to read the billboard. Note your phone's
    RSSI in the device drawer. Set **Viewer zone threshold** a few dB below it.
 4. Walk to the far edge of the area you want to count and set the

@@ -61,6 +61,7 @@ export async function saveSettings(values: Record<string, string | number>): Pro
   cache = null
   const ops = Object.entries(values)
     .filter(([k]) => k in DEFAULT_SETTINGS)
+    .filter(([k, v]) => typeof (DEFAULT_SETTINGS as unknown as Record<string, unknown>)[k] !== 'number' || Number.isFinite(Number(v)))
     .map(([k, v]) =>
       prisma.settings.upsert({
         where: { key: k },

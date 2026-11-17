@@ -5,9 +5,14 @@ import { getSettings } from './settings'
 import { classify, mergeDetails, detailsFromMsg, displayName } from './classify'
 import { deviceVendor, mdCompany, normMac } from './vendors'
 
+let warnedSalt = false
 function getHmacSalt(): Buffer {
   const s = process.env.HMAC_SALT
   if (s) return Buffer.from(s, 'hex')
+  if (process.env.NODE_ENV === 'production' && !warnedSalt) {
+    warnedSalt = true
+    console.warn('HMAC_SALT is not set; deriving the MAC-hash salt from DATABASE_URL. Set HMAC_SALT (and keep it stable).')
+  }
   // Derive a stable salt from DATABASE_URL so device IDs stay consistent across deploys
   const url = process.env.DATABASE_URL || 'billboard-default-salt'
   return createHmac('sha256', 'billboard-salt-v1').update(url).digest()

@@ -1,8 +1,18 @@
 import type { NextConfig } from 'next'
 
 const config: NextConfig = {
-  // Allow large API responses for CSV export
-  api: { responseLimit: false },
+  poweredByHeader: false,
+  async headers() {
+    return [{
+      source: '/:path*',
+      headers: [
+        { key: 'X-Content-Type-Options', value: 'nosniff' },
+        { key: 'X-Frame-Options', value: 'DENY' },
+        { key: 'Referrer-Policy', value: 'same-origin' },
+        { key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' },
+      ],
+    }]
+  },
 }
 
 export default config
